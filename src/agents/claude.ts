@@ -8,6 +8,7 @@ export function runClaude(
   sdkPath: string,
   task: AgentTask,
   emit: (event: AgentEvent) => void,
+  env = agentEnvironment(),
 ): AgentRun {
   const controller = new AbortController();
   const done = (async () => {
@@ -25,7 +26,7 @@ export function runClaude(
           cwd: task.cwd,
           pathToClaudeCodeExecutable: path,
           abortController: controller,
-          env: agentEnvironment(),
+          env,
           includePartialMessages: true,
           permissionMode: "default",
           settingSources: ["user"],

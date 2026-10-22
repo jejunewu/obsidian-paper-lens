@@ -23,6 +23,7 @@ import { saveSource } from "../pdf/source";
 import { TranslationManager } from "../translation/manager";
 import { ChatPanel } from "./chat";
 import { textDialog, unsavedDialog } from "./modals";
+import { TranslationStatus } from "./translation-status";
 export const VIEW_TYPE = "paper-lens";
 
 export class PaperLensView extends ItemView {
@@ -48,6 +49,9 @@ export class PaperLensView extends ItemView {
   private pageInput?: HTMLInputElement;
   private status?: HTMLElement;
   private progress?: HTMLElement;
+  private translationStatus = new TranslationStatus();
+  private translationLog?: HTMLElement;
+  private translationDetails?: HTMLDetailsElement;
   private translationOpen = false;
   private chatOpen = false;
   private saveBusy = false;
@@ -240,6 +244,11 @@ export class PaperLensView extends ItemView {
       await this.manager.cancel();
     });
     this.cancelButton.hidden = true;
+    this.translationDetails = this.contentEl.createEl("details", {
+      cls: "pl-translation-details",
+    });
+    this.translationDetails.createEl("summary", { text: "翻译任务详情" });
+    this.translationLog = this.translationDetails.createEl("pre");
     this.translationPermissions = this.contentEl.createDiv({
       cls: "pl-translation-permissions",
     });
@@ -613,6 +622,15 @@ export class PaperLensView extends ItemView {
       this.translateButton!.disabled = true;
       this.cancelButton!.hidden = false;
     }
+    this.translationStatus.reset();
+    this.translationLog!.textContent = "";
+    this.translationStatus.event({
+      type: "status",
+      text: restoreOnly
+        ? "正在恢复翻译检查点…"
+        : "正在准备论文快照并连接本地 Agent…",
+    });
+    this.progress!.textContent = this.translationStatus.text;
     try {
       const pdf = await PDFDocument.load(this.bytes);
       await this.manager.start(
@@ -640,6 +658,19 @@ export class PaperLensView extends ItemView {
               if (event.type === "permission") event.respond(false);
               return;
             }
+            this.translationStatus.event(event);
+            this.progress!.textContent = this.translationStatus.text;
+            if (
+              event.type === "delta" ||
+              event.type === "status" ||
+              event.type === "error"
+            ) {
+              this.translationLog!.textContent = (
+                (this.translationLog!.textContent || "") +
+                (event.type === "delta" ? event.text : `\n${event.text}\n`)
+              ).slice(-12000);
+            }
+            if (event.type === "error") this.translationDetails!.open = true;
             if (event.type === "permission") {
               this.permissionReplies.add(event.respond);
               const box = this.translationPermissions!.createDiv({
@@ -657,8 +688,6 @@ export class PaperLensView extends ItemView {
                   box.remove();
                 });
             }
-            if (event.type === "status" || event.type === "error")
-              this.progress!.textContent = event.text;
             if (
               event.type === "done" ||
               event.type === "error" ||
@@ -671,13 +700,9 @@ export class PaperLensView extends ItemView {
             }
           },
           progress: (manifest) => {
-            const done = manifest.pages.filter(
-                (p) => p.status === "completed",
-              ).length,
-              failed = manifest.pages.filter(
-                (p) => p.status === "failed",
-              ).length;
-            this.progress!.textContent = `译文 ${done}/${manifest.pages.length} 页${failed ? ` · ${failed} 页失败，可重试` : ""} · ${manifest.status}`;
+            if (this.closed) return;
+            this.translationStatus.progress(manifest);
+            this.progress!.textContent = this.translationStatus.text;
           },
           page: async (page, bytes, warnings) => {
             if (!this.closed) {
@@ -689,7 +714,8 @@ export class PaperLensView extends ItemView {
           saved: async (path, bytes) => {
             if (!this.closed) {
               await this.translation!.merged(bytes);
-              this.progress!.textContent = `译文已保存：${path.split("/").pop()}`;
+              this.translationStatus.save(path);
+              this.progress!.textContent = this.translationStatus.text;
               new Notice(`译文已保存：${path}`);
             }
           },
@@ -702,7 +728,12 @@ export class PaperLensView extends ItemView {
       }
     } catch (e) {
       this.translateButton!.disabled = false;
+      this.translateButton!.textContent = "翻译 / 重试失败页";
       this.cancelButton!.hidden = true;
+      this.translationStatus.event({ type: "error", text: String(e) });
+      this.progress!.textContent = this.translationStatus.text;
+      this.translationLog!.textContent += `\n${String(e)}\n`;
+      this.translationDetails!.open = true;
       throw e;
     }
   }

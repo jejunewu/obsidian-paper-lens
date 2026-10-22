@@ -16,7 +16,9 @@ describe("Codex process lifecycle", () => {
 const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
 rl.on('line',line=>{ const m=JSON.parse(line); if(!m.id)return;
 if(m.method==='initialize')send({id:m.id,result:{}});
-if(m.method==='thread/resume')send({id:m.id,result:{thread:{id:m.params.threadId}}});
+if(m.method==='thread/resume'){
+if(['model','approvalPolicy','sandbox'].some(key=>key in m.params)){send({id:m.id,error:{message:'must inherit local configuration'}});return;}
+send({id:m.id,result:{thread:{id:m.params.threadId}}});}
 if(m.method==='turn/start'){send({id:m.id,result:{turn:{id:'turn'}}});send({method:'item/agentMessage/delta',params:{threadId:'session',delta:'中文'}});send({method:'turn/completed',params:{threadId:'session',turn:{id:'turn',status:'completed'}}});}
 });`,
         { mode: 0o755 },

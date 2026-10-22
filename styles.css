@@ -54,6 +54,17 @@
   max-width: 100%;
   overflow-wrap: anywhere;
 }
+.pl-translation-details {
+  padding: 0 12px 6px;
+  color: var(--text-muted);
+}
+.pl-translation-details pre {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
 .pl-panels {
   display: flex;
   flex: 1;

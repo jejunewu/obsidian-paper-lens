@@ -55,6 +55,7 @@ export class TranslationManager {
   private options?: TranslationOptions;
   private callbacks?: TranslationCallbacks;
   private lastError = "";
+  private terminalError = "";
   constructor(private agents: AgentService) {}
   get active(): boolean {
     return !!this.run || this.starting;
@@ -100,6 +101,7 @@ export class TranslationManager {
     this.stopped = false;
     this.saved = false;
     this.lastError = "";
+    this.terminalError = "";
     this.seen.clear();
     const sourceHash = digest(options.bytes),
       association = digest(Buffer.from(options.documentId + sourceHash));
@@ -193,6 +195,11 @@ export class TranslationManager {
       });
       return;
     }
+    await this.updateManifest((manifest) => {
+      manifest.status = "running";
+      delete manifest.error;
+    });
+    await this.check();
     try {
       this.run = await this.agents.run(
         options.kind,
@@ -204,7 +211,12 @@ export class TranslationManager {
           skillPath: options.skillPath,
           prompt: `请完整执行 paper-lens-translate skill。任务：${join(folder, "job.json")}。原文快照：${job.sourcePath}。工具缓存允许使用：${job.toolDir}。中文字体：${job.fontPath}。逐页英译简中，保留页序、尺寸、图表、公式；视觉检查后发布每页，并最终 merge。若存在已完成产物，验证并复用；修复失败页。不要仅回复翻译说明，必须实际交付协议产物。`,
         },
-        callbacks.event,
+        (event) => {
+          if (event.type === "error") this.terminalError = event.text;
+          // Agent completion alone is not a delivered translation.
+          if (event.type === "done" || event.type === "error") return;
+          callbacks.event(event);
+        },
       );
       const current = this.run;
       if (this.stopped) {
@@ -212,15 +224,61 @@ export class TranslationManager {
         this.run = undefined;
         return;
       }
-      void current.done.then(async () => {
-        if (this.run === current) this.run = undefined;
-        this.unlock();
-        await this.check();
-      });
+      void current.done
+        .then(async () => {
+          if (this.run !== current) return;
+          while (this.checking)
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          if (this.run !== current) return;
+          await this.check();
+          if (!this.stopped) {
+            if (!this.saved) {
+              this.terminalError ||=
+                this.lastError ||
+                "Agent 已结束，但未交付完整译文；点击重试可继续未完成页";
+              await this.updateManifest((manifest) => {
+                manifest.status = "failed";
+                manifest.error = this.terminalError;
+              });
+              await this.check();
+              callbacks.event({ type: "error", text: this.terminalError });
+            } else callbacks.event({ type: "done" });
+          }
+        })
+        .catch((error) => {
+          callbacks.event({ type: "error", text: String(error) });
+        })
+        .finally(() => {
+          if (this.run === current) {
+            this.run = undefined;
+            this.unlock();
+          }
+        });
     } catch (e) {
       this.run = undefined;
+      this.terminalError = String(e);
+      await this.updateManifest((manifest) => {
+        manifest.status = "failed";
+        manifest.error = this.terminalError;
+      });
+      await this.check();
       throw e;
     }
+  }
+  private async updateManifest(
+    update: (manifest: JobManifest) => void,
+  ): Promise<void> {
+    const path = join(this.job!.outputDir, "manifest.json");
+    const manifest = validateManifest(
+      JSON.parse(await readFile(path, "utf8")),
+      this.job!.id,
+      this.job!.sourceHash,
+      this.job!.pageCount,
+    );
+    update(manifest);
+    const temp = `${path}.${randomUUID()}.tmp`;
+    await writeFile(temp, JSON.stringify(manifest));
+    await rename(temp, path);
   }
   async check(): Promise<void> {
     if (
@@ -244,7 +302,11 @@ export class TranslationManager {
         job.sourceHash,
         job.pageCount,
       );
-      callbacks.progress(manifest);
+      callbacks.progress(
+        this.terminalError && !this.saved
+          ? { ...manifest, status: "failed", error: this.terminalError }
+          : manifest,
+      );
       for (const entry of manifest.pages)
         if (
           entry.status === "completed" &&

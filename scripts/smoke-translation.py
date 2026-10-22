@@ -45,6 +45,10 @@ for page in layout["pages"]:
     number = page["page"]
     (root / "translations" / f"{number}.json").write_text(json.dumps({u["id"]: mapping[u["text"]] for u in page["units"]}))
     run("render", "--page", str(number))
+    draft = fitz.open(root / "drafts" / f"{number}.pdf")
+    expected_preview = draft[0].get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+    actual_preview = fitz.Pixmap(root / "previews" / f"{number}.png")
+    assert actual_preview.samples == expected_preview.samples, "Preview differs from the saved translation PDF"
     run("publish", "--page", str(number), success=False)
     run("publish", "--page", str(number), "--reviewed")
 run("merge")

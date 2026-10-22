@@ -9,7 +9,7 @@ import {
 } from "../src/translation/manager";
 import { AgentService } from "../src/agents/service";
 import { digest } from "../src/translation/protocol";
-import type { JobManifest } from "../src/core/types";
+import type { AgentEvent, JobManifest } from "../src/core/types";
 
 const roots: string[] = [];
 const managers: TranslationManager[] = [];
@@ -32,18 +32,30 @@ async function setup() {
     finish = resolve;
   });
   const agents = new AgentService();
-  vi.spyOn(agents, "run").mockResolvedValue({ done, cancel: finish });
+  let emit!: (event: AgentEvent) => void;
+  vi.spyOn(agents, "run").mockImplementation(
+    async (_kind, _path, _sdk, _task, callback) => {
+      emit = callback;
+      return { done, cancel: finish };
+    },
+  );
   const manager = new TranslationManager(agents);
   managers.push(manager);
+  const events: AgentEvent[] = [],
+    progress: JobManifest[] = [];
   const received: number[] = [],
     saved: string[] = [];
   const callbacks: TranslationCallbacks = {
-    event: () => {},
+    event: (event) => {
+      events.push(event);
+    },
     sourceBytes: async () => readFile(source),
     page: async (page) => {
       received.push(page);
     },
-    progress: () => {},
+    progress: (manifest) => {
+      progress.push(manifest);
+    },
     saved: async (path) => {
       saved.push(path);
     },
@@ -93,6 +105,10 @@ async function setup() {
     source,
     received,
     saved,
+    emit: (event: AgentEvent) => emit(event),
+    finish,
+    events,
+    progress,
   };
 }
 async function check(manager: TranslationManager) {
@@ -102,6 +118,39 @@ async function check(manager: TranslationManager) {
   }
 }
 describe("translation checkpoints", () => {
+  it("persists Agent failure across polling and restoration, then clears it for retry", async () => {
+    const s = await setup();
+    s.emit({
+      type: "error",
+      text: "Missing environment variable: OPENAI_API_KEY",
+    });
+    s.finish();
+    await check(s.manager);
+    expect(s.progress.at(-1)).toMatchObject({
+      status: "failed",
+      error: "Missing environment variable: OPENAI_API_KEY",
+    });
+    const stored = JSON.parse(
+      await readFile(join(s.folder, "manifest.json"), "utf8"),
+    );
+    expect(stored.status).toBe("failed");
+    await s.manager.start(s.options, s.callbacks, true);
+    await check(s.manager);
+    expect(s.progress.at(-1)?.error).toContain("OPENAI_API_KEY");
+    await s.manager.start(s.options, s.callbacks);
+    expect(s.progress.at(-1)).toMatchObject({ status: "running" });
+    expect(s.progress.at(-1)?.error).toBeUndefined();
+  });
+  it("reports completion without delivered artifacts as a retryable failure", async () => {
+    const s = await setup();
+    s.emit({ type: "done" });
+    s.finish();
+    await check(s.manager);
+    expect(s.progress.at(-1)).toMatchObject({ status: "failed" });
+    expect(s.progress.at(-1)?.error).toContain("未交付完整译文");
+    expect(s.events.some((e) => e.type === "done")).toBe(false);
+    expect(s.events.some((e) => e.type === "error")).toBe(true);
+  });
   it("prevents concurrent translation in another tab but allows checkpoint restoration", async () => {
     const s = await setup();
     const another = new TranslationManager(new AgentService());

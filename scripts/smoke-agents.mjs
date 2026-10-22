@@ -7,7 +7,11 @@ await build({
   format: "cjs",
   outfile: "dist/smoke-agents.cjs",
 });
-const result = spawnSync(process.execPath, ["dist/smoke-agents.cjs"], {
-  stdio: "inherit",
-});
+const result = spawnSync(
+  process.execPath,
+  ["dist/smoke-agents.cjs", ...process.argv.slice(2)],
+  {
+    stdio: "inherit",
+  },
+);
 process.exit(result.status ?? 1);

@@ -1,9 +1,10 @@
 import { PluginSettingTab, Setting, type App } from "obsidian";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { mkdir } from "node:fs/promises";
 import type PaperLensPlugin from "./main";
 import type { AgentKind } from "./core/types";
-import { executable } from "./agents/executables";
+import { executable, resolveAgentEnvironment } from "./agents/executables";
 export interface PaperLensSettings {
   defaultAgent: AgentKind;
   codexPath: string;
@@ -34,7 +35,7 @@ export class PaperLensSettingsTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.createEl("h2", { text: "Paper Lens" });
     containerEl.createEl("p", {
-      text: "使用本机已登录的 Codex 或 Claude Code。模型留空时沿用 CLI 配置。",
+      text: "自动复用本机 Codex / Claude Code 的配置和终端环境，无需重新配置 API Key。下面的路径和模型均为可选覆盖，留空即可。",
     });
     new Setting(containerEl).setName("默认 Agent").addDropdown((drop) =>
       drop
@@ -97,11 +98,14 @@ export class PaperLensSettingsTab extends PluginSettingTab {
           });
           const results = await Promise.allSettled(
             (["codex", "claude"] as const).map((kind) =>
-              executable(
-                kind,
-                this.plugin.settings[
-                  kind === "codex" ? "codexPath" : "claudePath"
-                ],
+              resolveAgentEnvironment().then((env) =>
+                executable(
+                  kind,
+                  this.plugin.settings[
+                    kind === "codex" ? "codexPath" : "claudePath"
+                  ],
+                  env,
+                ),
               ),
             ),
           );
@@ -112,6 +116,57 @@ export class PaperLensSettingsTab extends PluginSettingTab {
             )
             .join("；");
           button.setDisabled(false);
+        }),
+      );
+    new Setting(containerEl)
+      .setName("测试 Agent 连接")
+      .setDesc(
+        "用默认 Agent 发送一条简短测试消息，验证现有配置、认证和模型响应。",
+      )
+      .addButton((button) =>
+        button.setButtonText("测试连接").onClick(async () => {
+          button.setDisabled(true);
+          const status = containerEl.createEl("p", {
+            attr: { role: "status" },
+          });
+          status.textContent = "正在连接…";
+          let timeout: ReturnType<typeof setTimeout> | undefined;
+          try {
+            const cwd = join(this.plugin.workRoot, "connection-test");
+            await mkdir(cwd, { recursive: true });
+            const kind = this.plugin.settings.defaultAgent;
+            let output = "";
+            const run = await this.plugin.agents.run(
+              kind,
+              this.plugin.cliPath(kind),
+              this.plugin.sdkPath,
+              {
+                cwd,
+                model: this.plugin.model(kind),
+                prompt:
+                  "This is a Paper Lens connectivity test. Do not use tools. Reply exactly: Paper Lens 连接成功",
+              },
+              (event) => {
+                if (event.type === "delta") output += event.text;
+                if (event.type === "status") status.textContent = event.text;
+                if (event.type === "error")
+                  status.textContent = `连接失败：${event.text}`;
+                if (event.type === "done")
+                  status.textContent = `${kind} 连接成功：${output}`;
+                if (event.type === "cancelled")
+                  status.textContent =
+                    "连接测试超时，请检查本地 CLI 是否能正常响应";
+                if (event.type === "permission") event.respond(false);
+              },
+            );
+            timeout = setTimeout(() => run.cancel(), 60000);
+            await run.done;
+          } catch (error) {
+            status.textContent = `连接失败：${String(error)}`;
+          } finally {
+            if (timeout) clearTimeout(timeout);
+            button.setDisabled(false);
+          }
         }),
       );
     containerEl.createEl("p", {

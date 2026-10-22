@@ -26,10 +26,11 @@ export class RpcClient {
     cwd: string,
     private event: (message: RpcMessage) => void,
     private exited: (error: Error) => void,
+    env = agentEnvironment(),
   ) {
     this.process = spawn(path, ["app-server", "--stdio"], {
       cwd,
-      env: agentEnvironment(),
+      env,
       stdio: "pipe",
     });
     const parser = new JsonLines(

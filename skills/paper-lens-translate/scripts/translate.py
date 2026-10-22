@@ -138,8 +138,12 @@ def render(job, root, number):
     for item in page_data["protected"]:
         if item["text"].strip() and item["text"].strip() not in output_text:
             raise ValueError(f"Protected text missing: {item['text']}")
-    atomic(root / "drafts" / f"{number}.pdf", doc.tobytes(garbage=4, deflate=True))
-    atomic(root / "previews" / f"{number}.png", page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5)).tobytes("png"))
+    data = doc.tobytes(garbage=4, deflate=True)
+    atomic(root / "drafts" / f"{number}.pdf", data)
+    # Serialization rewrites font/object references. Render the delivered bytes,
+    # rather than the stale page object, so visual review matches the artifact.
+    with fitz.open(stream=data, filetype="pdf") as delivered:
+        atomic(root / "previews" / f"{number}.png", delivered[0].get_pixmap(matrix=fitz.Matrix(1.5, 1.5)).tobytes("png"))
     write_json(root / "reports" / f"{number}.json", report)
     print(f"Rendered page {number}. Visually review previews/{number}.png before publishing.")
 
