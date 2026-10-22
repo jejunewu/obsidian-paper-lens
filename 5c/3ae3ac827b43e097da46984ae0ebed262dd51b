@@ -1,0 +1,32 @@
+src/translation/manager.ts
+  s_c801515aa6d777::t_e95cf2adea16aa 1-26,28-42,47-84,86-94,96-107
+  s_c801515aa6d777::t_30aaed5fa265f5 27,43-46,85,95
+skills/paper-lens-translate/scripts/bootstrap.sh
+  s_c801515aa6d777::t_3316d281021d21 1-17
+src/pdf/source.ts
+  s_c801515aa6d777::t_e676b6243ae49b 1-17
+skills/paper-lens-translate/SKILL.md
+  s_c801515aa6d777::t_3316d281021d21 1-30
+tests/translation.test.ts
+  s_c801515aa6d777::t_0f5fd35401b0dd 1-52
+tests/source.test.ts
+  s_c801515aa6d777::t_0f5fd35401b0dd 1-20
+skills/paper-lens-translate/scripts/translate.py
+  s_c801515aa6d777::t_3316d281021d21 1-230
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.51-trip",
+  "base_commit_sha": "5c3ae3ac827b43e097da46984ae0ebed262dd51b",
+  "prompts": {},
+  "sessions": {
+    "s_c801515aa6d777": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a16434-c72d-7383-a34e-9996ecf530e6",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wu <w.junjie@trip.com>"
+    }
+  }
+}
