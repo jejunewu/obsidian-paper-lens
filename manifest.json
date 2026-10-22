@@ -1,0 +1,9 @@
+{
+  "id": "paper-lens",
+  "name": "Paper Lens",
+  "version": "0.1.0",
+  "minAppVersion": "1.0.0",
+  "description": "Paper Lens plugin for Obsidian.",
+  "author": "wu",
+  "isDesktopOnly": false
+}

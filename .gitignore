@@ -1,0 +1,14 @@
+node_modules/
+/main.js
+/main.js.map
+/data.json
+dist/
+.obsidian/
+.env
+.env.*
+!.env.example
+*.pem
+*.log
+.DS_Store
+.idea/
+.vscode/
