@@ -1,0 +1,68 @@
+styles.css
+  s_c801515aa6d777::t_529bfa4e729fb8 57-67
+scripts/smoke-agents.ts
+  s_c801515aa6d777::t_842a4d3b1d4ebd 4,9,33-37,39
+src/ui/translation-status.ts
+  s_c801515aa6d777::t_e495944d1a67ab 1-6,8,13-14,19-24,26-27,29-30,32-34,36-37,39-42,48-54,56-60
+  s_c801515aa6d777::t_40b3b3e88fe25d 7,9-12,15-18,31
+tests/translation.test.ts
+  s_c801515aa6d777::t_a55ef7f1f38cc8 12,35-39,41,44-45,49-51,56-58,108-111,121-124,126-130,132-133,135-150,153
+src/ui/view.ts
+  s_c801515aa6d777::t_e495944d1a67ab 26,52-54,247,249-251,625-630,632-633,661-673,703-705,717-718,731,733-736
+tests/environment.test.ts
+  s_c801515aa6d777::t_9220de5c32672f 1-17,23-24,30-32,34-48,52-56
+  s_c801515aa6d777::t_79fdbeae8f407a 26
+  s_c801515aa6d777::t_7e1525857676db 18,33
+README.md
+  s_c801515aa6d777::t_e405b75af4c4bb 7,11,67
+src/agents/codex.ts
+  s_c801515aa6d777::t_627f09e420fc5e 36,38
+  s_c801515aa6d777::t_842a4d3b1d4ebd 3,8
+docs/VALIDATION.md
+  s_c801515aa6d777::t_e405b75af4c4bb 5,19
+  s_c801515aa6d777::t_d8f72229e04430 7,20-21
+src/agents/executables.ts
+  s_c801515aa6d777::t_842a4d3b1d4ebd 5-6,8,10,19-23,25-44,47-48,50-56,58-69,71-76,80
+  s_c801515aa6d777::t_7e1525857676db 12,57,85
+  s_c801515aa6d777::t_008e2966d5e19b 24
+skills/paper-lens-translate/scripts/translate.py
+  s_c801515aa6d777::t_9842941fe882f9 141-146
+src/agents/rpc.ts
+  s_c801515aa6d777::t_842a4d3b1d4ebd 29,33
+scripts/smoke-translation.py
+  s_c801515aa6d777::t_c6803d8ce175e8 48-51
+src/translation/manager.ts
+  s_c801515aa6d777::t_79fdbeae8f407a 305-309
+  s_c801515aa6d777::t_627f09e420fc5e 58,104,199-202,215-219,230,233-238,240-247,249-251,259,261-264,268,270-275,277-282
+  s_c801515aa6d777::t_7e1525857676db 229,232,252-255
+src/agents/service.ts
+  s_c801515aa6d777::t_40b3b3e88fe25d 7,21,31
+  s_c801515aa6d777::t_842a4d3b1d4ebd 2,15-16,18-20,24-25
+src/settings.ts
+  s_c801515aa6d777::t_529bfa4e729fb8 4,7,38,102-107,121-123,125,127-129,131-169,171
+src/agents/claude.ts
+  s_c801515aa6d777::t_842a4d3b1d4ebd 11,29
+scripts/smoke-agents.mjs
+  s_c801515aa6d777::t_842a4d3b1d4ebd 10-13
+tests/translation-status.test.ts
+  s_c801515aa6d777::t_40b3b3e88fe25d 36-43,45-50
+  s_c801515aa6d777::t_e495944d1a67ab 1-12,14-31,33-35,51
+tests/agents.test.ts
+  s_c801515aa6d777::t_40b3b3e88fe25d 19-21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.51-trip",
+  "base_commit_sha": "ec1036f6ec48385448ec3f9dfee3155adc67e705",
+  "prompts": {},
+  "sessions": {
+    "s_c801515aa6d777": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a16434-c72d-7383-a34e-9996ecf530e6",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wu <w.junjie@trip.com>"
+    }
+  }
+}
