@@ -1,0 +1,44 @@
+package.json
+  s_c801515aa6d777::t_b458ea8e6d57b8 10-12
+  s_c801515aa6d777::t_360ab95f06a514 18
+  s_c801515aa6d777::t_093872768a06b3 19
+src/core/annotations.ts
+  s_c801515aa6d777::t_33b090726a1d28 1-18
+tsconfig.json
+  s_c801515aa6d777::t_b1d56d02c900a9 7
+tests/pdf.test.ts
+  s_c801515aa6d777::t_b1d56d02c900a9 1-53
+src/core/context.ts
+  s_c801515aa6d777::t_33b090726a1d28 1-12
+src/core/types.ts
+  s_c801515aa6d777::t_33b090726a1d28 1-29
+src/agents/json-lines.ts
+  s_c801515aa6d777::t_33b090726a1d28 1-16
+src/pdf/annotations.ts
+  s_c801515aa6d777::t_257f139c7208f3 1,49
+  s_c801515aa6d777::t_f25d5f3ba9762c 2-48,50-57
+tests/core.test.ts
+  s_c801515aa6d777::t_57526dc13204fb 1-52
+src/translation/protocol.ts
+  s_c801515aa6d777::t_f25d5f3ba9762c 1-44
+assets/OFL.txt
+  s_c801515aa6d777::t_03b33a68fa08c3 1-92
+src/core/geometry.ts
+  s_c801515aa6d777::t_33b090726a1d28 1-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.51-trip",
+  "base_commit_sha": "af1db78615ea28b159c2a93269602b1d57c44f14",
+  "prompts": {},
+  "sessions": {
+    "s_c801515aa6d777": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a16434-c72d-7383-a34e-9996ecf530e6",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wu <w.junjie@trip.com>"
+    }
+  }
+}
