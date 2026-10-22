@@ -13,5 +13,5 @@ if [ ! -x "$tool_dir/venv/bin/python" ]; then
   "$tool_dir/bin/uv" python install 3.12.12
   "$tool_dir/bin/uv" venv --python 3.12.12 "$tool_dir/venv"
 fi
-"$tool_dir/bin/uv" pip install --python "$tool_dir/venv/bin/python" PyMuPDF==1.25.5
+"$tool_dir/bin/uv" pip install --python "$tool_dir/venv/bin/python" --index-url https://pypi.org/simple PyMuPDF==1.25.5
 "$tool_dir/venv/bin/python" -c 'import pymupdf; assert pymupdf.VersionBind == "1.25.5"; print("Paper Lens translation environment ready")'

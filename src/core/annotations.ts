@@ -3,16 +3,31 @@ import type { Annotation } from "./types";
 export class AnnotationStore {
   items: Annotation[];
   private history: Annotation[][] = [];
-  constructor(items: Annotation[]) { this.items = structuredClone(items); }
-  get dirty(): boolean { return this.history.length > 0; }
+  constructor(items: Annotation[]) {
+    this.items = structuredClone(items);
+  }
+  get dirty(): boolean {
+    return this.history.length > 0;
+  }
   upsert(item: Annotation): void {
     this.history.push(structuredClone(this.items));
-    this.items = [...this.items.filter(x => x.id !== item.id), structuredClone(item)];
+    this.items = [
+      ...this.items.filter((x) => x.id !== item.id),
+      structuredClone(item),
+    ];
   }
   remove(id: string): void {
-    if (!this.items.some(x => x.id === id)) return;
-    this.history.push(structuredClone(this.items)); this.items = this.items.filter(x => x.id !== id);
+    if (!this.items.some((x) => x.id === id)) return;
+    this.history.push(structuredClone(this.items));
+    this.items = this.items.filter((x) => x.id !== id);
   }
-  undo(): boolean { const previous = this.history.pop(); if (!previous) return false; this.items = previous; return true; }
-  saved(): void { this.history = []; }
+  undo(): boolean {
+    const previous = this.history.pop();
+    if (!previous) return false;
+    this.items = previous;
+    return true;
+  }
+  saved(): void {
+    this.history = [];
+  }
 }
