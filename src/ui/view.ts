@@ -12,7 +12,7 @@ import { PDFDocument } from "pdf-lib";
 import type PaperLensPlugin from "../main";
 import type { AgentKind, AgentModel, Annotation } from "../core/types";
 import { AnnotationStore, textStyle } from "../core/annotations";
-import { clampZoom } from "../core/geometry";
+import { clampZoom, type Position } from "../core/geometry";
 import { digest } from "../translation/protocol";
 import { PdfReader } from "../pdf/reader";
 import {
@@ -69,6 +69,9 @@ export class PaperLensView extends FileView {
   private translateButton?: HTMLButtonElement;
   private cancelButton?: HTMLButtonElement;
   private pageInput?: HTMLInputElement;
+  private scrollButton?: HTMLButtonElement;
+  private scrollLinked = true;
+  private activePane: "source" | "translation" = "source";
   private status?: HTMLElement;
   private progress?: HTMLElement;
   private translationStatus = new TranslationStatus();
@@ -80,6 +83,7 @@ export class PaperLensView extends FileView {
   private ready = false;
   private persistence = Promise.resolve();
   private restorePosition?: { page: number; fraction: number };
+  private restoreTranslationPosition?: Position;
   private translationPermissions?: HTMLElement;
   private permissionReplies = new Set<(allow: boolean) => void>();
   constructor(
@@ -107,6 +111,9 @@ export class PaperLensView extends FileView {
       ...super.getState(),
       file: this.path,
       position: this.source?.position() ?? this.restorePosition,
+      translationPosition: this.ready ? this.translation?.position() : this.restoreTranslationPosition,
+      scrollLinked: this.scrollLinked,
+      activePane: this.activePane,
       translationOpen: this.translationOpen,
       agent: this.kind,
       zoom: this.zoom,
@@ -125,16 +132,24 @@ export class PaperLensView extends FileView {
     if (typeof state.zoom === "number")
       this.zoom = clampZoom(state.zoom);
     this.translationOpen = state.translationOpen === true;
+    this.scrollLinked = state.scrollLinked !== false;
+    this.activePane = state.activePane === "translation" ? "translation" : "source";
     const pos = state.position as
       | { page?: number; fraction?: number }
       | undefined;
-    if (pos && Number.isInteger(pos.page) && typeof pos.fraction === "number")
-      this.restorePosition = { page: pos.page!, fraction: pos.fraction };
+    this.restorePosition = pos && Number.isInteger(pos.page) && pos.page! > 0 &&
+      typeof pos.fraction === "number" && Number.isFinite(pos.fraction)
+      ? { page: pos.page!, fraction: Math.max(0, Math.min(1, pos.fraction)) } : undefined;
+    const translatedPos = state.translationPosition as Partial<Position> | undefined;
+    this.restoreTranslationPosition = translatedPos && Number.isInteger(translatedPos.page) && translatedPos.page! > 0 &&
+      typeof translatedPos.fraction === "number" && Number.isFinite(translatedPos.fraction)
+      ? { page: translatedPos.page!, fraction: Math.max(0, Math.min(1, translatedPos.fraction)) } : undefined;
     if (
       path && path !== this.path && this.store.dirty &&
       !(await this.resolveUnsaved())
     ) return;
     await super.setState({ ...state, file: path }, result);
+    this.panels();
   }
   canAcceptExtension(extension: string): boolean {
     return extension.toLowerCase() === "pdf";
@@ -221,11 +236,14 @@ export class PaperLensView extends FileView {
       this.source?.setMode(mode.value as "continuous" | "single");
       this.translation?.setMode(mode.value as "continuous" | "single");
     });
+    this.scrollButton = this.button(toolbar, "同步滚动", () => {
+      this.setScrollLinked(!this.scrollLinked);
+    });
     this.button(toolbar, "上一页", () =>
-      this.navigate((this.source?.position().page ?? 1) - 1),
+      this.navigate((this.activeReader()?.position().page ?? 1) - 1),
     );
     this.button(toolbar, "下一页", () =>
-      this.navigate((this.source?.position().page ?? 1) + 1),
+      this.navigate((this.activeReader()?.position().page ?? 1) + 1),
     );
     this.pageInput = toolbar.createEl("input", {
       type: "number",
@@ -359,14 +377,16 @@ export class PaperLensView extends FileView {
       this.plugin.resourceRoot,
       true,
     );
-    this.source.onPosition = (pos) => {
-      this.translation?.navigate(pos);
-      if (this.pageInput) this.pageInput.value = String(pos.page);
-    };
-    this.translation.onPosition = (pos) => {
-      this.source?.navigate(pos);
-      if (this.pageInput) this.pageInput.value = String(pos.page);
-    };
+    this.source.onPosition = (pos) => this.readerPosition("source", pos);
+    this.translation.onPosition = (pos) => this.readerPosition("translation", pos);
+    for (const pane of ["source", "translation"] as const) {
+      const el = pane === "source" ? this.source.el : this.translation.el;
+      for (const event of ["pointerdown", "focusin", "wheel"] as const)
+        this.registerDomEvent(el, event, () => {
+          this.activePane = pane;
+          if (this.pageInput) this.pageInput.value = String(this.activeReader()?.position().page ?? 1);
+        });
+    }
     this.source.onAnnotation = (id, edit) => {
       const changed = this.selected !== id;
       this.selected = id;
@@ -476,6 +496,39 @@ export class PaperLensView extends FileView {
     if (!this.translationPanel) return;
     this.translationPanel.hidden = !this.translationOpen;
     this.translateDivider!.hidden = !this.translationOpen;
+    if (!this.translationOpen) {
+      this.activePane = "source";
+      if (this.pageInput) this.pageInput.value = String(this.source?.position().page ?? 1);
+    }
+    if (this.scrollButton) {
+      const label = this.scrollLinked ? "同步滚动" : "独立滚动";
+      this.scrollButton.textContent = label;
+      this.scrollButton.setAttribute("aria-label", label);
+      this.scrollButton.setAttribute("aria-pressed", String(this.scrollLinked));
+      this.scrollButton.disabled = !this.translationOpen;
+      this.scrollButton.title = !this.translationOpen ? "展开译文后可切换滚动方式" : this.scrollLinked
+        ? "两栏按相同页码和页内位置一起滚动；点击切换为独立滚动"
+        : "两栏各自滚动，翻页作用于最后操作的一栏；点击恢复同步";
+    }
+  }
+  private activeReader(): PdfReader | undefined {
+    return this.activePane === "translation" ? this.translation : this.source;
+  }
+  private readerPosition(pane: "source" | "translation", pos: Position): void {
+    this.activePane = pane;
+    if (this.scrollLinked)
+      (pane === "source" ? this.translation : this.source)?.navigate(pos);
+    if (this.pageInput) this.pageInput.value = String(pos.page);
+    this.app.workspace.requestSaveLayout();
+  }
+  private setScrollLinked(linked: boolean): void {
+    this.scrollLinked = linked;
+    this.panels();
+    if (linked) {
+      const pos = this.activeReader()?.position();
+      if (pos) this.readerPosition(this.activePane, pos);
+    }
+    this.app.workspace.requestSaveLayout();
   }
   private rememberModel(): void {
     const model = this.modelInput!.value === "custom"
@@ -606,8 +659,12 @@ export class PaperLensView extends FileView {
       if (this.pageInput) this.pageInput.max = String(pages.length);
       this.ready = true;
       this.status!.textContent = `${file.basename} · ${pages.length} 页${pages.some((text) => !text.trim()) ? " · 含无文本页，扫描页不支持翻译" : ""}`;
-      if (this.restorePosition)
-        this.navigate(this.restorePosition.page, this.restorePosition.fraction);
+      if (this.restorePosition && this.restorePosition.page <= pages.length)
+        this.source!.navigate(this.restorePosition);
+      this.translation!.navigate(this.scrollLinked
+        ? this.source!.position() : this.restoreTranslationPosition && this.restoreTranslationPosition.page <= pages.length
+          ? this.restoreTranslationPosition : this.source!.position());
+      if (this.pageInput) this.pageInput.value = String(this.activeReader()?.position().page ?? 1);
       await this.translate(true);
     } catch (e) {
       this.error(e);
@@ -733,9 +790,11 @@ export class PaperLensView extends FileView {
     )
       return;
     const pos = { page, fraction: Math.max(0, Math.min(1, fraction)) };
-    this.source?.navigate(pos);
-    this.translation?.navigate(pos);
+    this.activeReader()?.navigate(pos);
+    if (this.scrollLinked)
+      (this.activePane === "source" ? this.translation : this.source)?.navigate(pos);
     if (this.pageInput) this.pageInput.value = String(page);
+    this.app.workspace.requestSaveLayout();
   }
   private async translate(restoreOnly = false): Promise<void> {
     if (!this.ready || !this.bytes)
