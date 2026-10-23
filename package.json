@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && node esbuild.config.mjs production",
     "test": "vitest run",
+    "smoke:translation": "node scripts/smoke-pipeline.mjs",
     "package": "npm run build && node scripts/package.mjs"
   },
   "devDependencies": {

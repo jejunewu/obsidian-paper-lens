@@ -521,6 +521,10 @@ export class PaperLensView extends FileView {
       this.modelCatalog = models;
       this.catalogReady = true;
       fill();
+      if (this.manager.active) {
+        this.modelInput.disabled = true;
+        this.effortInput!.disabled = true;
+      }
       this.modelInput.title = "翻译模型（模型是否可用由当前 provider 验证）";
     } catch (e) {
       if (this.closed || version !== this.catalogVersion) return;
@@ -748,6 +752,8 @@ export class PaperLensView extends FileView {
       this.panels();
       this.translateButton!.disabled = true;
       this.cancelButton!.hidden = false;
+      for (const input of [this.agentInput, this.modelInput, this.customModelInput, this.effortInput])
+        if (input) input.disabled = true;
     }
     this.translationStatus.reset();
     this.translationLog!.textContent = "";
@@ -827,6 +833,9 @@ export class PaperLensView extends FileView {
               this.translateButton!.disabled = false;
               this.translateButton!.textContent = "翻译 / 重试失败页";
               this.cancelButton!.hidden = true;
+              for (const input of [this.agentInput, this.modelInput, this.customModelInput])
+                if (input) input.disabled = false;
+              this.fillEfforts();
             }
           },
           progress: (manifest) => {
@@ -855,8 +864,14 @@ export class PaperLensView extends FileView {
       if (!this.manager.active) {
         this.translateButton!.disabled = false;
         this.cancelButton!.hidden = true;
+        for (const input of [this.agentInput, this.modelInput, this.customModelInput])
+          if (input) input.disabled = false;
+        this.fillEfforts();
       }
     } catch (e) {
+      for (const input of [this.agentInput, this.modelInput, this.customModelInput])
+        if (input) input.disabled = false;
+      this.fillEfforts();
       this.translateButton!.disabled = false;
       this.translateButton!.textContent = "翻译 / 重试失败页";
       this.cancelButton!.hidden = true;

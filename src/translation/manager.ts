@@ -19,6 +19,7 @@ import {
   validateManifest,
 } from "./protocol";
 import type { AgentService } from "../agents/service";
+import { TranslationPipeline } from "./pipeline";
 
 export interface TranslationOptions {
   documentId: string;
@@ -47,6 +48,7 @@ export class TranslationManager {
   private static owners = new Map<string, TranslationManager>();
   private lockKey?: string;
   private starting = false;
+  private cancelling = false;
   job?: TranslationJob;
   private run?: AgentRun;
   private timer?: ReturnType<typeof setInterval>;
@@ -59,9 +61,11 @@ export class TranslationManager {
   private callbacks?: TranslationCallbacks;
   private lastError = "";
   private terminalError = "";
-  constructor(private agents: AgentService) {}
+  constructor(agents: AgentService,
+    private createRun = (options: TranslationOptions, job: TranslationJob, emit: (event: AgentEvent) => void) =>
+      new TranslationPipeline(agents, options, job, emit).start()) {}
   get active(): boolean {
-    return !!this.run || this.starting;
+    return !!this.run || this.starting || this.cancelling;
   }
   private unlock(): void {
     if (this.lockKey && TranslationManager.owners.get(this.lockKey) === this)
@@ -204,18 +208,7 @@ export class TranslationManager {
     });
     await this.check();
     try {
-      this.run = await this.agents.run(
-        options.kind,
-        options.cliPath,
-        options.sdkPath,
-        {
-          cwd: folder,
-          model: options.model,
-          effort: options.effort,
-          fullAccess: options.fullAccess,
-          skillPath: options.skillPath,
-          prompt: `请完整执行 paper-lens-translate skill。任务：${join(folder, "job.json")}。原文快照：${job.sourcePath}。工具缓存允许使用：${job.toolDir}。中文字体：${job.fontPath}。逐页英译简中，保留页序、尺寸、图表、公式；视觉检查后发布每页，并最终 merge。若存在已完成产物，验证并复用；修复失败页。不要仅回复翻译说明，必须实际交付协议产物。`,
-        },
+      this.run = this.createRun(options, job,
         (event) => {
           if (event.type === "error") this.terminalError = event.text;
           // Agent completion alone is not a delivered translation.
@@ -379,13 +372,16 @@ export class TranslationManager {
     }
   }
   async cancel(): Promise<void> {
+    if (this.cancelling) return;
+    this.cancelling = true;
     this.stopped = true;
-    this.unlock();
-    this.run?.cancel();
+    const current = this.run;
+    current?.cancel();
     this.run = undefined;
-    if (this.job) {
-      await writeFile(join(this.job.outputDir, "cancelled"), "cancelled");
-      try {
+    try {
+      if (this.job) {
+        await writeFile(join(this.job.outputDir, "cancelled"), "cancelled");
+        await current?.done;
         const path = join(this.job.outputDir, "manifest.json"),
           m = JSON.parse(await readFile(path, "utf8")) as JobManifest;
         if (m.status !== "completed") {
@@ -394,18 +390,24 @@ export class TranslationManager {
           await writeFile(temp, JSON.stringify(m));
           await rename(temp, path);
         }
-      } catch {
-        /* Keep previously published checkpoints. */
       }
+    } catch {
+      /* Keep previously published checkpoints. */
+    } finally {
+      await current?.done.catch(() => {});
+      this.cancelling = false;
+      this.unlock();
     }
     this.callbacks?.event({ type: "cancelled" });
   }
   dispose(): void {
     this.stopped = true;
-    this.unlock();
     if (this.timer) clearInterval(this.timer);
     this.watcher?.close();
-    this.run?.cancel();
+    const current = this.run;
+    current?.cancel();
+    if (current) void current.done.finally(() => this.unlock());
+    else this.unlock();
     this.run = undefined;
   }
 }

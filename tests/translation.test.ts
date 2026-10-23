@@ -19,7 +19,7 @@ afterEach(async () => {
     roots.splice(0).map((dir) => rm(dir, { recursive: true, force: true })),
   );
 });
-async function setup() {
+async function setup(cancelImmediately = true) {
   const root = await mkdtemp(join(tmpdir(), "paper-lens-job-"));
   roots.push(root);
   const d = await PDFDocument.create();
@@ -33,13 +33,10 @@ async function setup() {
   });
   const agents = new AgentService();
   let emit!: (event: AgentEvent) => void;
-  vi.spyOn(agents, "run").mockImplementation(
-    async (_kind, _path, _sdk, _task, callback) => {
-      emit = callback;
-      return { done, cancel: finish };
-    },
-  );
-  const manager = new TranslationManager(agents);
+  const manager = new TranslationManager(agents, (_options, _job, callback) => {
+    emit = callback;
+    return { done, cancel: () => { if (cancelImmediately) finish(); } };
+  });
   managers.push(manager);
   const events: AgentEvent[] = [],
     progress: JobManifest[] = [];
@@ -118,6 +115,22 @@ async function check(manager: TranslationManager) {
   }
 }
 describe("translation checkpoints", () => {
+  it("keeps the document locked until cancelled workers have stopped", async () => {
+    const s = await setup(false);
+    const cancelling = s.manager.cancel();
+    await vi.waitFor(async () => {
+      expect(await readFile(join(s.folder, "cancelled"), "utf8")).toBe("cancelled");
+    });
+    expect(s.manager.active).toBe(true);
+    await expect(s.manager.start(s.options, s.callbacks)).rejects.toThrow("已有翻译任务");
+    const another = new TranslationManager(new AgentService());
+    managers.push(another);
+    await expect(another.start(s.options, s.callbacks)).rejects.toThrow("另一个");
+    s.finish();
+    await cancelling;
+    expect(s.manager.active).toBe(false);
+    expect(JSON.parse(await readFile(join(s.folder, "manifest.json"), "utf8")).status).toBe("cancelled");
+  });
   it("persists Agent failure across polling and restoration, then clears it for retry", async () => {
     const s = await setup();
     s.emit({

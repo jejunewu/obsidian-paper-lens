@@ -82,7 +82,7 @@ export class RpcClient {
     const timer = setTimeout(() => {
       if (this.process.exitCode === null) this.process.kill("SIGKILL");
     }, 2000);
-    timer.unref();
+    timer.unref?.();
     this.exited(error);
   }
 }
