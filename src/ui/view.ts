@@ -861,6 +861,10 @@ export class PaperLensView extends FileView {
         },
         restoreOnly,
       );
+      if (restoreOnly && !this.manager.job) {
+        this.translationStatus.event({ type: "status", text: "尚未翻译，点击“全文翻译”开始" });
+        this.progress!.textContent = this.translationStatus.text;
+      }
       if (!this.manager.active) {
         this.translateButton!.disabled = false;
         this.cancelButton!.hidden = true;

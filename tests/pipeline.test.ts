@@ -10,7 +10,7 @@ import { digest } from "../src/translation/protocol";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });
-async function fixture(failReview = false, pageError?: string) {
+async function fixture(failReview = false, pageError?: string, extractionVersion = 3) {
   const root = await mkdtemp(join(tmpdir(), "paper-lens-pipeline-")); roots.push(root);
   await writeFile(join(root, "skill.md"), "Translate and visually review each page.");
   const pdf = await PDFDocument.create(); pdf.addPage([600, 800]);
@@ -18,7 +18,7 @@ async function fixture(failReview = false, pageError?: string) {
   const job: TranslationJob = { version: 1, id: "job", documentId: "paper", sourceHash: digest(bytes),
     sourcePath: join(root, "source.pdf"), pageCount: 3, sizes: Array(3).fill({ width: 600, height: 800 }),
     sourceLanguage: "en", targetLanguage: "zh-CN", outputDir: root, toolDir: root, fontPath: "font" };
-  const layout = { version: 1, extractionVersion: 2, sourceHash: job.sourceHash, pages: [1, 2, 3].map((page) => ({
+  const layout = { version: 1, extractionVersion, sourceHash: job.sourceHash, pages: [1, 2, 3].map((page) => ({
     page, text: `English page ${page}`, units: [{ id: `p${page}-u1`, text: "A test sentence" }],
     ...(page === 2 && pageError ? { error: pageError } : {}),
   })) };
@@ -72,6 +72,12 @@ async function fixture(failReview = false, pageError?: string) {
 }
 
 describe("parallel translation pipeline", () => {
+  it("rejects outdated custom tools instead of silently falling back to line translation", async () => {
+    const f = await fixture(false, undefined, 2); await f.pipeline.start().done;
+    expect(f.commands).toEqual([["extract", undefined]]);
+    expect(f.tasks).toHaveLength(0);
+    expect(f.events.at(-1)).toMatchObject({ type: "error", text: expect.stringContaining("段落布局") });
+  });
   it("marks an unsupported page failed while translating other pages", async () => {
     const f = await fixture(false, "倾斜文字暂不支持"); await f.pipeline.start().done;
     expect(f.commands.filter(([c]) => c === "fail")).toEqual([["fail", 2]]);
@@ -87,12 +93,22 @@ describe("parallel translation pipeline", () => {
       [{ id: "a", text: "" }], [{ id: "a", text: "中文" }, { id: "a", text: "重复" }]])
       expect(() => validateTranslations({ translations }, units)).toThrow();
   });
+  it("requires each inline formula token once while allowing Chinese word order", () => {
+    const units = [{ id: "paragraph", text: "The value [[PL_KEEP_0]] remains fixed.",
+      inline: [{ token: "[[PL_KEEP_0]]", text: "x = y + 1" }] }];
+    expect(validateTranslations({ translations: [{ id: "paragraph", text: "保持 [[PL_KEEP_0]] 不变。" }] }, units))
+      .toEqual({ paragraph: "保持 [[PL_KEEP_0]] 不变。" });
+    for (const text of ["保持不变。", "[[PL_KEEP_1]] 不变。", "[[PL_KEEP_0]] [[PL_KEEP_0]]"])
+      expect(() => validateTranslations({ translations: [{ id: "paragraph", text }] }, units)).toThrow("占位符");
+  });
   it("reuses valid pages and glossary, runs two pages and serializes reviewed publications", async () => {
     const f = await fixture(); await f.pipeline.start().done;
     expect(f.counters()).toMatchObject({ maxRunning: 2, maxWriters: 1 });
     expect(f.commands.filter(([c]) => c === "publish").map(([, p]) => p).sort()).toEqual([2, 3]);
     expect(f.commands.at(-1)).toEqual(["merge", undefined]);
     expect(f.tasks).toHaveLength(4);
+    expect(f.tasks.filter((t) => !t.images).every((t) => t.prompt.includes("按完整句子和段落"))).toBe(true);
+    expect(f.tasks.filter((t) => !t.images).every((t) => t.prompt.includes("不得把邻页的词句补入本页"))).toBe(true);
     expect(f.tasks.every((t) => t.model === "selected" && t.effort === "low" && t.fullAccess)).toBe(true);
     expect(f.tasks.filter((t) => t.images).every((t) => !!t.sessionId)).toBe(true);
     expect(f.tasks.filter((t) => t.images).every((t) => t.images!.length === 2)).toBe(true);

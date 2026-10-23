@@ -7,7 +7,8 @@ import type { TranslationOptions } from "./manager";
 import { artifactBytes, validateManifest } from "./protocol";
 import { TranslationTools } from "./tools";
 
-interface Unit { id: string; text: string }
+interface Unit { id: string; text: string; inline?: { token: string; text: string }[];
+  align?: string; indent?: number; lineCount?: number }
 interface Layout { version: number; extractionVersion: number; sourceHash: string;
   pages: { page: number; text: string; units: Unit[]; error?: string }[] }
 interface Review { approved: boolean; issues: string; warnings: string[] }
@@ -33,6 +34,11 @@ export function validateTranslations(value: unknown, units: Unit[]): Record<stri
     if (!entry || !expected.has(entry.id) || entry.id in result ||
       typeof entry.text !== "string" || !entry.text.trim()) throw new Error("译文存在重复、未知或空白片段");
     result[entry.id] = entry.text.trim();
+    const unit = units.find((unit) => unit.id === entry.id)!;
+    const expectedTokens = new Set(unit.inline?.map((item) => item.token) ?? []);
+    const tokens = entry.text.match(/\[\[PL_KEEP_\d+\]\]/g) ?? [];
+    if (tokens.length !== expectedTokens.size || tokens.some((token) => !expectedTokens.has(token)) ||
+      new Set(tokens).size !== tokens.length) throw new Error("译文遗漏、重复或修改了公式/引用占位符");
   }
   if (Object.keys(result).length !== units.length) throw new Error("模型遗漏了待翻译片段");
   return result;
@@ -121,13 +127,15 @@ export class TranslationPipeline {
     let layout: Layout;
     try {
       layout = await this.tools.json("layout.json") as Layout;
-      if (layout.version !== 1 || layout.extractionVersion !== 2 || layout.sourceHash !== this.job.sourceHash ||
+      if (layout.version !== 1 || layout.extractionVersion !== 3 || layout.sourceHash !== this.job.sourceHash ||
         layout.pages.length !== this.job.pageCount) throw new Error("布局缓存过期");
     } catch {
       this.emit({ type: "status", text: "正在提取全文与排版位置…" });
       await this.tools.command("extract");
       layout = await this.tools.json("layout.json") as Layout;
     }
+    if (layout.version !== 1 || layout.extractionVersion !== 3 || layout.sourceHash !== this.job.sourceHash ||
+      layout.pages.length !== this.job.pageCount) throw new Error("翻译工具未生成段落布局；请更新 Paper Lens 的翻译 skill 和 scripts 资源");
     const manifest = validateManifest(await this.tools.json("manifest.json"), this.job.id, this.job.sourceHash, this.job.pageCount);
     const pending: number[] = [];
     for (const entry of manifest.pages) {
@@ -179,6 +187,8 @@ export class TranslationPipeline {
   private async page(layout: Layout, glossary: Glossary, number: number): Promise<void> {
     const started = Date.now(), page = layout.pages[number - 1]!;
     if (page.error) throw new Error(page.error);
+    const content = page.units.map(({ id, text, inline }) => ({ id, text,
+      ...(inline?.length ? { inline: inline.map(({ token, text }) => ({ token, text })) } : {}) }));
     const schema = objectSchema({ translations: { type: "array", items: objectSchema({
       id: { type: "string", enum: page.units.map((u) => u.id) }, text: { type: "string" },
     }) } });
@@ -195,19 +205,23 @@ export class TranslationPipeline {
       this.assertActive();
       this.emit({ type: "status", text: `第 ${number}/${this.job.pageCount} 页 · ${attempt ? "修正译文" : "翻译"} · ${this.concurrency} 页并行` });
       if (!translations || feedback) {
-        const answer = await this.ask(`逐片段翻译第 ${number} 页为简体中文，必须覆盖每个 id。结合相邻片段理解完整句子，保持术语一致。每个片段尽量简洁且不包含换行，以适合原行宽。保留引用、公式、作者、URL 和标识。\n术语表：${JSON.stringify(glossary)}\n相邻正文：${JSON.stringify(context)}\n待翻译片段：${JSON.stringify(page.units)}\n${feedback ? `上次结果：${JSON.stringify(translations)}\n需修正：${feedback}` : ""}`, schema, session);
+        const answer = await this.ask(`按完整句子和段落翻译第 ${number} 页为自然、准确的简体中文，必须覆盖每个 id。每个单元是一段正文、标题或图表标签，PDF 的视觉换行已合并，不得把句子按原行拆译；先理解整段，再组织通顺完整的中文。使用相邻正文理解跨页续句，按语义恢复版式产生的断词。只翻译待翻译单元包含的原文，相邻页面仅提供上下文，不得把邻页的词句补入本页；页末未完句可自然保持未完，不加结论或省略号。不要为了原行宽省略、概括或压缩原文含义，插件会在段落区域重新换行、利用安全空白并调整字号。保留引用、作者、URL 和标识；每个 [[PL_KEEP_N]] 公式/引用占位符必须原样保留一次，可按中文语序移动，inline 中的原文用于理解其含义。\n术语表：${JSON.stringify(glossary)}\n相邻正文：${JSON.stringify(context)}\n待翻译段落：${JSON.stringify(content)}\n${feedback ? `上次结果：${JSON.stringify(translations)}\n需修正：${feedback}` : ""}`, schema, session);
         session = answer.session;
         translations = validateTranslations(answer.value, page.units);
         await this.writeJson(`translations/${number}.json`, translations);
       }
       try { await this.tools.command("render", number); }
-      catch (error) { feedback = String(error); continue; }
+      catch (error) {
+        feedback = String(error);
+        this.emit({ type: "status", text: `第 ${number} 页需调整排版：${feedback}` });
+        continue;
+      }
       if (!sourcePreviewReady) {
         await this.tools.command("preview", number);
         sourcePreviewReady = true;
       }
       this.emit({ type: "status", text: `第 ${number} 页 · 正在检查中文与图表排版…` });
-      const answer = await this.ask(`视觉对比所附第 ${number} 页两张图片：第一张为原文，第二张为译文。核对原文片段和译文，检查中文可读、无裁剪、列序正确、原图表与公式完整且不被覆盖，术语与语义正确。仅在检查通过时 approved=true，否则指出可修正问题。\n原文：${JSON.stringify(page.units)}\n译文：${JSON.stringify(translations)}`, reviewSchema, session,
+      const answer = await this.ask(`视觉对比所附第 ${number} 页两张图片：第一张为原文，第二张为译文。按完整段落核对语义和句子连贯性，拒绝逐行拼接、遗漏、无依据概括，尤其检查页末续句没有补入仅出现在相邻页的内容或自行增加结论/省略号。检查中文可读、无裁剪、列序正确，段落对齐/首行缩进与对应源文段相符，原文的首行缩进可保留，不要求统一左缘；两端对齐的段落末行可留白，字少时段尾可留空。原图表与公式完整且不被覆盖，术语正确。仅在检查通过时 approved=true，否则指出可修正问题。\n源文排版（PDF 点单位）：${JSON.stringify(page.units.map(({ id, align, indent, lineCount }) => ({ id, align, indent, lineCount })))}\n原文：${JSON.stringify(content)}\n译文：${JSON.stringify(translations)}`, reviewSchema, session,
         [join(this.job.outputDir, "previews", `source-${number}.png`),
           join(this.job.outputDir, "previews", `${number}.png`)]);
       session = answer.session;

@@ -63,7 +63,7 @@ export class TranslationTools {
       join(dirname(this.skillPath), "scripts/translate.py"), command,
       "--job", join(this.job.outputDir, "job.json"),
       ...(page ? ["--page", String(page)] : []), ...extra,
-    ], this.job.outputDir, this.env!, this.signal);
+    ], this.job.outputDir, { ...this.env!, PYTHONDONTWRITEBYTECODE: "1" }, this.signal);
   }
   async json(name: string): Promise<unknown> {
     return JSON.parse(await readFile(join(this.job.outputDir, name), "utf8"));

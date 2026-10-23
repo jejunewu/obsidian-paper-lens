@@ -1,11 +1,13 @@
 import * as esbuild from "esbuild";
 import { builtinModules } from "node:module";
-import { cp, mkdir, copyFile } from "node:fs/promises";
+import { cp, mkdir, copyFile, rm } from "node:fs/promises";
 
 async function resources() {
   await mkdir("dist/resources/pdfjs", { recursive: true });
   await cp("assets", "dist/resources/fonts", { recursive: true });
-  await cp("skills", "dist/resources/skills", { recursive: true });
+  await rm("dist/resources/skills", { recursive: true, force: true });
+  await cp("skills", "dist/resources/skills", { recursive: true,
+    filter: (path) => !path.includes("__pycache__") && !path.endsWith(".pyc") });
   for (const file of ["pdf.mjs", "pdf.worker.mjs"])
     await copyFile(
       `node_modules/pdfjs-dist/build/${file}`,

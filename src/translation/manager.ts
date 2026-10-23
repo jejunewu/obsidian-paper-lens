@@ -110,8 +110,9 @@ export class TranslationManager {
     this.lastError = "";
     this.terminalError = "";
     this.seen.clear();
+    this.job = undefined;
     const sourceHash = digest(options.bytes),
-      association = digest(Buffer.from(options.documentId + sourceHash));
+      association = digest(Buffer.from(options.documentId + sourceHash + ":paragraph-v1"));
     const folder = join(options.root, "documents", association, "translation");
     if (restoreOnly) {
       try {

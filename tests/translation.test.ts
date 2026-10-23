@@ -115,6 +115,19 @@ async function check(manager: TranslationManager) {
   }
 }
 describe("translation checkpoints", () => {
+  it("clears the previous job when another document has no checkpoint to restore", async () => {
+    const s = await setup();
+    await s.manager.cancel();
+    await s.manager.start({ ...s.options, documentId: "another-paper" }, s.callbacks, true);
+    expect(s.manager.job).toBeUndefined();
+    expect(s.manager.active).toBe(false);
+    expect(JSON.parse(await readFile(join(s.folder, "job.json"), "utf8")).documentId).toBe("paper");
+  });
+  it("starts a paragraph cache separately from older line translation checkpoints", async () => {
+    const s = await setup();
+    const legacy = join(s.options.root, "documents", digest(Buffer.from(s.options.documentId + digest(s.bytes))), "translation");
+    expect(s.folder).not.toBe(legacy);
+  });
   it("keeps the document locked until cancelled workers have stopped", async () => {
     const s = await setup(false);
     const cancelling = s.manager.cancel();

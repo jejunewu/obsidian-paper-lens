@@ -9,6 +9,7 @@ import re
 import tempfile
 
 import pymupdf as fitz
+from paragraphs import extract_units, safe_frame, plan, draw
 
 
 def sha(data):
@@ -65,25 +66,16 @@ def extract(job, root):
         error = None
         if not page.get_text().strip():
             error = "本页没有可选文字；暂不支持扫描页 OCR"
-        units, keep, warnings = [], [], []
-        for block in page.get_text("dict", sort=True)["blocks"]:
-            for line in block.get("lines", []):
-                for span in line["spans"]:
-                    if protected(span):
-                        keep.append({"text": span["text"], "bbox": span["bbox"]})
-                    else:
-                        try:
-                            rotation = text_rotation(line["dir"])
-                        except ValueError as reason:
-                            error = str(reason)
-                            continue
-                        units.append({"id": f"p{number}-u{len(units)+1}", "text": span["text"],
-                                      "bbox": span["bbox"], "size": span["size"], "font": span["font"],
-                                      "color": span["color"], "rotation": rotation})
+        units, keep, layout_error = extract_units(page, number, protected)
+        error = error or layout_error
+        if any((fitz.Rect(unit['bbox']) + (0.1, 0.1, -0.1, -0.1)).intersects(fitz.Rect(item['bbox']))
+               for unit in units for item in keep if item['text'].strip()):
+            error = error or "本页存在跨行/跨块公式与正文交叠，暂无法安全重排；保留原文，继续翻译其他页"
+        warnings = []
         pages.append({"page": number, "width": page.rect.width, "height": page.rect.height,
                       "units": units, "protected": keep, "text": page.get_text(sort=True), "warnings": warnings,
                       "error": error})
-    write_json(root / "layout.json", {"version": 1, "extractionVersion": 2, "sourceHash": job["sourceHash"], "pages": pages})
+    write_json(root / "layout.json", {"version": 1, "extractionVersion": 3, "sourceHash": job["sourceHash"], "pages": pages})
     print(f"Extracted {len(pages)} pages. Translate all positioned units using adjacent context.")
 
 
@@ -118,42 +110,39 @@ def render(job, root, number):
         raise ValueError(f"Missing translations: {missing}")
     doc = one_page(job, number)
     page = doc[0]
-    # Shrink span redactions to avoid adjacent formula glyphs being removed by intersection.
-    for unit in page_data["units"]:
-        box = fitz.Rect(unit["bbox"])
-        box.x0 += 0.1
-        box.x1 -= 0.1
-        box.y0 += 0.1
-        box.y1 -= 0.1
-        if any(box.intersects(fitz.Rect(p["bbox"])) for p in page_data["protected"] if p["text"].strip()):
-            raise ValueError(f"Protected formula overlaps {unit['id']}; cannot safely redact this span")
-        page.add_redact_annot(box, fill=False, cross_out=False)
-    page.apply_redactions(images=0, graphics=0, text=0)
     font_path = Path(job["fontPath"])
     font = fitz.Font(fontfile=str(font_path))
     if not font.has_glyph(ord("中")):
         raise ValueError("Chinese font missing required glyphs")
+    fixed = [p["bbox"] for p in page_data["protected"] if p["text"].strip()]
+    fixed += [image["bbox"] for image in page.get_image_info()]
+    fixed += [list(fitz.Rect(item["rect"]) + (-0.5, -0.5, 0.5, 0.5)) for item in page.get_drawings()]
+    layouts = []
+    reserved = []
+    for unit in page_data["units"]:
+        if any((fitz.Rect(unit["bbox"]) + (0.1, 0.1, -0.1, -0.1)).intersects(fitz.Rect(p["bbox"]))
+               for p in page_data["protected"] if p["text"].strip()):
+            raise ValueError(f"Separate protected glyphs inside {unit['id']}; cannot safely reflow this formula/prose mixture")
+        obstacles = fixed + reserved + [u["bbox"] for u in page_data["units"] if u["id"] != unit["id"]]
+        layout = plan(unit, translations[unit["id"]].strip(), font, safe_frame(unit, page, obstacles))
+        layouts.append(layout)
+        reserved.append(layout["bbox"])
+    # Redact only original glyph areas; leave figures and separate equations intact.
+    for unit in page_data["units"]:
+        for span in unit["spans"]:
+            box = fitz.Rect(span["bbox"]) + (0.1, 0.1, -0.1, -0.1)
+            if any(box.intersects(fitz.Rect(p["bbox"])) for p in page_data["protected"] if p["text"].strip()):
+                raise ValueError(f"Protected formula overlaps {unit['id']}; cannot safely redact this paragraph")
+            page.add_redact_annot(box, fill=False, cross_out=False)
+    page.apply_redactions(images=0, graphics=0, text=0)
     page.insert_font(fontname="PLChinese", fontfile=str(font_path))
     report = {"page": number, "units": [], "warnings": page_data["warnings"]}
-    for unit in page_data["units"]:
-        text = translations[unit["id"]].strip()
-        if any(not font.has_glyph(ord(ch)) for ch in text if not ch.isspace()):
-            raise ValueError(f"Missing font glyph in {unit['id']}")
-        box = fitz.Rect(unit["bbox"])
-        rotation = unit.get("rotation", 0)
-        width, height = (box.height, box.width) if rotation in (90, 270) else (box.width, box.height)
-        size = min(unit["size"], height / (font.ascender - font.descender), 14)
-        minimum = min(7, unit["size"] * 0.75)
-        while size >= minimum and font.text_length(text, fontsize=size) > width:
-            size -= 0.25
-        if size < minimum or "\n" in text:
-            raise ValueError(f"Translation overflow in {unit['id']}: shorten accurately to fit original line")
-        color = tuple(((unit["color"] >> shift) & 255) / 255 for shift in (16, 8, 0))
-        offset = font.ascender * size
-        origin = {0: (box.x0, box.y0 + offset), 90: (box.x0 + offset, box.y1),
-                  180: (box.x1, box.y1 - offset), 270: (box.x1 - offset, box.y0)}[rotation]
-        page.insert_text(origin, text, fontsize=size, fontname="PLChinese", color=color, rotate=rotation)
-        report["units"].append({"id": unit["id"], "fontSize": size, "bbox": list(box), "rotation": rotation})
+    with fitz.open(job["sourcePath"]) as source:
+        for unit, layout in zip(page_data["units"], layouts):
+            draw(page, unit, layout, source, number - 1)
+            report["units"].append({"id": unit["id"], "fontSize": layout["fontSize"], "bbox": layout["bbox"],
+                                    "sourceBbox": unit["bbox"], "rotation": unit["rotation"], "align": unit["align"],
+                                    "lineCount": len(layout["lines"]), "sourceLineCount": unit["lineCount"]})
     # Ensure protected symbols survived as text (do not rely on a successful write).
     output_text = page.get_text()
     for item in page_data["protected"]:
