@@ -134,6 +134,11 @@
 .pl-reader[data-tool="text"] {
   cursor: crosshair;
 }
+.pl-reader[data-tool="select"] .textLayer,
+.pl-reader[data-tool="select"] .textLayer :is(span, br) {
+  user-select: text;
+  -webkit-user-select: text;
+}
 .pl-reader[data-tool="pan"] .textLayer,
 .pl-reader[data-tool="text"] .textLayer {
   pointer-events: none;
