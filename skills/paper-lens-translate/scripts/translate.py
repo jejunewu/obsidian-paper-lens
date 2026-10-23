@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -44,6 +45,14 @@ def protected(span):
             or bool(re.fullmatch(r"\[?[\d,\s–\-]+\]?", text)))
 
 
+def text_rotation(direction):
+    angle = math.degrees(math.atan2(-direction[1], direction[0])) % 360
+    rotation = (round(angle / 90) * 90) % 360
+    if abs((angle - rotation + 180) % 360 - 180) > 0.1:
+        raise ValueError("倾斜文字暂不支持原位翻译，请使用水平或 90° 倍数的文字方向")
+    return rotation
+
+
 def extract(job, root):
     data = Path(job["sourcePath"]).read_bytes()
     if sha(data) != job["sourceHash"]:
@@ -53,8 +62,9 @@ def extract(job, root):
         raise ValueError("Encrypted PDF or mismatched page count")
     pages = []
     for number, page in enumerate(doc, 1):
+        error = None
         if not page.get_text().strip():
-            raise ValueError(f"Page {number} has no selectable text; OCR is not supported")
+            error = "本页没有可选文字；暂不支持扫描页 OCR"
         units, keep, warnings = [], [], []
         for block in page.get_text("dict", sort=True)["blocks"]:
             for line in block.get("lines", []):
@@ -62,14 +72,18 @@ def extract(job, root):
                     if protected(span):
                         keep.append({"text": span["text"], "bbox": span["bbox"]})
                     else:
-                        if tuple(line["dir"]) != (1.0, 0.0):
-                            raise ValueError(f"Page {number}: rotated prose is not supported")
+                        try:
+                            rotation = text_rotation(line["dir"])
+                        except ValueError as reason:
+                            error = str(reason)
+                            continue
                         units.append({"id": f"p{number}-u{len(units)+1}", "text": span["text"],
                                       "bbox": span["bbox"], "size": span["size"], "font": span["font"],
-                                      "color": span["color"]})
+                                      "color": span["color"], "rotation": rotation})
         pages.append({"page": number, "width": page.rect.width, "height": page.rect.height,
-                      "units": units, "protected": keep, "text": page.get_text(sort=True), "warnings": warnings})
-    write_json(root / "layout.json", {"version": 1, "sourceHash": job["sourceHash"], "pages": pages})
+                      "units": units, "protected": keep, "text": page.get_text(sort=True), "warnings": warnings,
+                      "error": error})
+    write_json(root / "layout.json", {"version": 1, "extractionVersion": 2, "sourceHash": job["sourceHash"], "pages": pages})
     print(f"Extracted {len(pages)} pages. Translate all positioned units using adjacent context.")
 
 
@@ -96,6 +110,8 @@ def render(job, root, number):
     if layout["sourceHash"] != job["sourceHash"]:
         raise ValueError("Stale page layout")
     page_data = layout["pages"][number - 1]
+    if page_data.get("error"):
+        raise ValueError(page_data["error"])
     translations = read_json(root / "translations" / f"{number}.json")
     missing = [u["id"] for u in page_data["units"] if not isinstance(translations.get(u["id"]), str) or not translations[u["id"]].strip()]
     if missing:
@@ -124,15 +140,20 @@ def render(job, root, number):
         if any(not font.has_glyph(ord(ch)) for ch in text if not ch.isspace()):
             raise ValueError(f"Missing font glyph in {unit['id']}")
         box = fitz.Rect(unit["bbox"])
-        size = min(unit["size"], (box.height / 1.2), 14)
+        rotation = unit.get("rotation", 0)
+        width, height = (box.height, box.width) if rotation in (90, 270) else (box.width, box.height)
+        size = min(unit["size"], height / (font.ascender - font.descender), 14)
         minimum = min(7, unit["size"] * 0.75)
-        while size >= minimum and font.text_length(text, fontsize=size) > box.width:
+        while size >= minimum and font.text_length(text, fontsize=size) > width:
             size -= 0.25
         if size < minimum or "\n" in text:
             raise ValueError(f"Translation overflow in {unit['id']}: shorten accurately to fit original line")
         color = tuple(((unit["color"] >> shift) & 255) / 255 for shift in (16, 8, 0))
-        page.insert_text((box.x0, box.y0 + size), text, fontsize=size, fontname="PLChinese", color=color)
-        report["units"].append({"id": unit["id"], "fontSize": size, "bbox": list(box)})
+        offset = font.ascender * size
+        origin = {0: (box.x0, box.y0 + offset), 90: (box.x0 + offset, box.y1),
+                  180: (box.x1, box.y1 - offset), 270: (box.x1 - offset, box.y0)}[rotation]
+        page.insert_text(origin, text, fontsize=size, fontname="PLChinese", color=color, rotate=rotation)
+        report["units"].append({"id": unit["id"], "fontSize": size, "bbox": list(box), "rotation": rotation})
     # Ensure protected symbols survived as text (do not rely on a successful write).
     output_text = page.get_text()
     for item in page_data["protected"]:

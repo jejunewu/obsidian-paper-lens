@@ -8,7 +8,8 @@ import { artifactBytes, validateManifest } from "./protocol";
 import { TranslationTools } from "./tools";
 
 interface Unit { id: string; text: string }
-interface Layout { version: number; sourceHash: string; pages: { page: number; text: string; units: Unit[] }[] }
+interface Layout { version: number; extractionVersion: number; sourceHash: string;
+  pages: { page: number; text: string; units: Unit[]; error?: string }[] }
 interface Review { approved: boolean; issues: string; warnings: string[] }
 interface Glossary { terms: { english: string; chinese: string }[] }
 export interface PipelineTools {
@@ -120,7 +121,7 @@ export class TranslationPipeline {
     let layout: Layout;
     try {
       layout = await this.tools.json("layout.json") as Layout;
-      if (layout.version !== 1 || layout.sourceHash !== this.job.sourceHash ||
+      if (layout.version !== 1 || layout.extractionVersion !== 2 || layout.sourceHash !== this.job.sourceHash ||
         layout.pages.length !== this.job.pageCount) throw new Error("布局缓存过期");
     } catch {
       this.emit({ type: "status", text: "正在提取全文与排版位置…" });
@@ -177,6 +178,7 @@ export class TranslationPipeline {
   }
   private async page(layout: Layout, glossary: Glossary, number: number): Promise<void> {
     const started = Date.now(), page = layout.pages[number - 1]!;
+    if (page.error) throw new Error(page.error);
     const schema = objectSchema({ translations: { type: "array", items: objectSchema({
       id: { type: "string", enum: page.units.map((u) => u.id) }, text: { type: "string" },
     }) } });

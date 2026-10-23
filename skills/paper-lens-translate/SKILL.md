@@ -21,7 +21,7 @@ Run `bash scripts/bootstrap.sh TOOL_DIR` using the script directory beside this 
 
 All following commands use the absolute path to `scripts/translate.py` beside this skill, and `--job /absolute/task/job.json`:
 
-1. `extract`: create `layout.json` with every page's positioned text units, styles, protected formula spans and original page text. Reject encrypted, broken or image-only PDFs. Render source previews on demand with `preview --page N`.
+1. `extract`: create `layout.json` with every page's positioned text units, styles, protected formula spans and original page text. Reject encrypted or broken PDFs. Record unsupported text directions or missing text as page errors so other pages can proceed. Cardinal text directions (0, 90, 180 and 270 degrees) preserve their original rotation. Render source previews on demand with `preview --page N`.
 2. Read the paper abstract, section headings and adjacent page text. Create or update `glossary.json` with consistent English → Chinese terminology. Preserve author names, citations, reference identifiers, URLs, code and formula symbols. Translate extractable figure captions and table text; do not OCR pixels in figures.
 3. Translate every `units` entry into fluent Simplified Chinese. Store `translations/N.json` as an object mapping each unit `id` to translated text. Units may be portions of one sentence: use neighboring units and adjacent pages as context, so terminology and sentence meaning remain consistent. Formula-font and equation spans are retained by the tool and must not be translated. Do not omit units or leave English prose silently. Scientific names and identifiers may stay English.
 4. `render --page N`: replace only text at those unit rectangles in a copy of the corresponding source page. Images and line graphics remain. The tool checks geometry, text coverage and minimum readable font size. If it reports an overflow, shorten the Chinese wording accurately, adjust the translation and rerun. Do not add pages, change page size, rasterize the source or cover figures. Keep equations and code as objects.
@@ -35,4 +35,4 @@ All following commands use the absolute path to `scripts/translate.py` beside th
 
 ## Layout limitations
 
-Dense formula/prose mixtures, rotated text and very narrow table cells may be impossible to translate legibly in place. Let these pages fail explicitly with the reason if repeated correction cannot meet the checks. Page identity, readable Chinese, and intact figures/formulae take precedence over declaring completion.
+Dense formula/prose mixtures, skewed text beyond cardinal rotations and very narrow table cells may be impossible to translate legibly in place. Let these pages fail explicitly with the reason if repeated correction cannot meet the checks. Page identity, readable Chinese, and intact figures/formulae take precedence over declaring completion.

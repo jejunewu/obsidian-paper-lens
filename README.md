@@ -37,7 +37,7 @@ Paper Lens 在一个 Obsidian 标签页中提供原文 PDF 和可展开的中文
 
 插件按自带 skill 的质量规则执行流水线：插件准备环境、提取、排版、校验、发布和合并；Agent 专注于术语、翻译和视觉审阅。缓存工具包括 uv、Python 3.12.12 和 PyMuPDF 1.25.5；用户无需预装 Python。有效工具环境不会重复安装；初次准备需网络下载。默认工作目录为 `~/Library/Application Support/Paper Lens`，保存论文快照和翻译产物，可在设置中更改。自定义翻译 skill 需保留同目录的 `scripts/bootstrap.sh` 与 `scripts/translate.py` 及其命令协议。
 
-扫描件 OCR、原 PDF 正文编辑、移动端、远程 Agent 和终端嵌入不在首版范围。图片中的文字不做 OCR。版式目标是页序、尺寸、图表和公式保留，中文在原文字区域可读；特别密集的公式/表格或旋转文字可能被明确标记失败。验证现状见 [验证记录](docs/VALIDATION.md)。
+扫描件 OCR、原 PDF 正文编辑、移动端、远程 Agent 和终端嵌入不在首版范围。图片中的文字不做 OCR。版式目标是页序、尺寸、图表和公式保留，中文在原文字区域可读；支持 0° / 90° / 180° / 270° 文字方向；特别密集的公式/表格或其他倾斜角度可能被明确标记为该页失败，其他页继续交付。验证现状见 [验证记录](docs/VALIDATION.md)。
 
 ## 开发
 
@@ -62,7 +62,7 @@ npm run package
 ## 在 Obsidian 中加载
 
 1. 在测试 Vault 中创建 `.obsidian/plugins/paper-lens/` 目录。
-2. 执行 `npm run package`，将 `dist/paper-lens-0.1.0.zip` 解压到该目录；包含 `main.js`、`manifest.json`、`styles.css` **和 `resources/`**，资源目录不可省略。也可直接复制 `dist/` 中这四项。
+2. 执行 `npm run package`，将 `dist/paper-lens-0.1.1.zip` 解压到该目录；包含 `main.js`、`manifest.json`、`styles.css` **和 `resources/`**，资源目录不可省略。也可直接复制 `dist/` 中这四项。
 3. 在 Obsidian 的设置 → 第三方插件中关闭受限模式，启用 **Paper Lens**；如未显示，重启 Obsidian。
 
 启用后通过 PDF 右键“使用 Paper Lens 打开”、命令面板“Paper Lens：打开论文 PDF”或侧边栏图标打开。也可以把 Vault 内 PDF 拖入 Paper Lens 面板。默认 PDF 打开行为保持独立。
@@ -98,5 +98,7 @@ PAPER_LENS_SMOKE_MODEL=gpt-6.1-sol PAPER_LENS_SMOKE_EFFORT=low npm run smoke:tra
 ```
 
 参数依次是独立工作目录、`codex` / `claude`、并发页数；两个环境变量可省略以沿用本地配置。探针生成合成 PDF，输出保存路径与耗时，5 分钟超时取消；不代表复杂论文质量验收。
+
+旋转文字排版回归测试：用已准备的 `TOOL_DIR/venv/bin/python tests/translation_layout_test.py` 运行，检查四个文字方向、译文边界、图形/公式保留，以及倾斜文字只影响对应页。
 
 资源许可证：PDF.js Apache-2.0，pdf-lib / fontkit MIT，Noto Sans CJK 字体 SIL OFL（随资源附许可证）。Claude Agent SDK 采用包内条款。Agent 安装的 PyMuPDF 为 AGPL/商业双重许可；分发闭源派生产品或服务前需确认适用条款和商业授权。工具独立执行，不打包 PyMuPDF wheel。

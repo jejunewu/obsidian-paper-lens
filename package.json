@@ -1,6 +1,6 @@
 {
   "name": "obsidian-paper-lens",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Paper Lens plugin for Obsidian.",
   "main": "main.js",

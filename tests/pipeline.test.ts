@@ -10,7 +10,7 @@ import { digest } from "../src/translation/protocol";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });
-async function fixture(failReview = false) {
+async function fixture(failReview = false, pageError?: string) {
   const root = await mkdtemp(join(tmpdir(), "paper-lens-pipeline-")); roots.push(root);
   await writeFile(join(root, "skill.md"), "Translate and visually review each page.");
   const pdf = await PDFDocument.create(); pdf.addPage([600, 800]);
@@ -18,8 +18,9 @@ async function fixture(failReview = false) {
   const job: TranslationJob = { version: 1, id: "job", documentId: "paper", sourceHash: digest(bytes),
     sourcePath: join(root, "source.pdf"), pageCount: 3, sizes: Array(3).fill({ width: 600, height: 800 }),
     sourceLanguage: "en", targetLanguage: "zh-CN", outputDir: root, toolDir: root, fontPath: "font" };
-  const layout = { version: 1, sourceHash: job.sourceHash, pages: [1, 2, 3].map((page) => ({
+  const layout = { version: 1, extractionVersion: 2, sourceHash: job.sourceHash, pages: [1, 2, 3].map((page) => ({
     page, text: `English page ${page}`, units: [{ id: `p${page}-u1`, text: "A test sentence" }],
+    ...(page === 2 && pageError ? { error: pageError } : {}),
   })) };
   // Page 1 is an existing valid checkpoint; only pages 2 and 3 may run.
   await writeFile(join(root, "one.pdf"), bytes);
@@ -71,6 +72,14 @@ async function fixture(failReview = false) {
 }
 
 describe("parallel translation pipeline", () => {
+  it("marks an unsupported page failed while translating other pages", async () => {
+    const f = await fixture(false, "倾斜文字暂不支持"); await f.pipeline.start().done;
+    expect(f.commands.filter(([c]) => c === "fail")).toEqual([["fail", 2]]);
+    expect(f.commands.filter(([c]) => c === "publish")).toEqual([["publish", 3]]);
+    expect(f.commands.some(([c]) => c === "merge")).toBe(false);
+    expect(f.tasks).toHaveLength(2);
+    expect(f.events.at(-1)).toMatchObject({ type: "error", text: expect.stringContaining("倾斜文字暂不支持") });
+  });
   it("rejects missing, duplicate and unknown translation units", () => {
     const units = [{ id: "a", text: "source" }];
     expect(validateTranslations({ translations: [{ id: "a", text: "中文" }] }, units)).toEqual({ a: "中文" });

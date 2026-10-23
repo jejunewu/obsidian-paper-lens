@@ -64,3 +64,13 @@ Claudian 当前自动选区上下文包含文字与文件路径，不含 PDF 页
 Claude SDK 实际可读取模型目录（default / opus / fable / sonnet / haiku）并进入绕过审批模式，但推理返回 `400 Access to Anthropic models is not allowed for this account`。参数与结构化结果处理通过替身测试，当前账号无法完成 Claude 翻译闭环；最高权限不能解除模型账号访问限制。
 
 可用 `npm run smoke:translation -- /tmp/paper-lens-smoke codex 2` 复现真实探针，模型和推理强度可通过 `PAPER_LENS_SMOKE_MODEL` / `PAPER_LENS_SMOKE_EFFORT` 指定。完整命令见 README。复杂双栏、密集表格/公式、长论文与正常 Claude 账号仍需单独验收。
+
+## 0.1.1 旋转图表标签修复（2026-10-23）
+
+安装后的真实错误为 `Page 27: rotated prose is not supported`，发生在全文提取阶段，尚未调用模型。该 51 页论文有 50 个纵向图表标签，方向均为 90°。修复后全部页面提取成功；翻译单元保留方向，按旋转后的行宽和字体升降部度量排版，支持 0° / 90° / 180° / 270°。其他倾斜角度记录为对应页错误，流水线继续处理其他页，且不合并含失败页的最终文件。布局缓存增加提取版本，旧缓存会自动重建，有效页面产物保留。
+
+42 个 Vitest 测试、类型检查和生产构建通过。新增两个 Python 回归测试检查四种方向的中文输出、文字边界、公式和线框保留、保存 PDF 与预览一致，以及倾斜页不阻断其他页提取。原双栏排版探针也通过。
+
+通过现有 Codex provider 和用户选择的 `deepseek-v4.1-flash`，先用合成图片验证图片输入与 JSON schema 输出，再在独立目录中用真实第 27 页完成翻译、双图视觉审阅、发布和自动保存，约 200.6 秒。MuPDF 读回与图片检查确认纵向中文标签、曲线图及 595.276 × 841.890 页面尺寸保留。该单页产物为 `/tmp/paper-lens-page27-acceptance/page27.zh-CN.pdf`；未声称整篇 51 页完成质量验收。
+
+此次按用户的安装故障排查请求，将 0.1.1 的代码、manifest、样式和翻译 skill 更新到当前安装目录，备份旧文件，并在 Obsidian 1.14.4 重新启用 Paper Lens。模型设置与原 PDF 保留，zip 和安装文件校验一致。
