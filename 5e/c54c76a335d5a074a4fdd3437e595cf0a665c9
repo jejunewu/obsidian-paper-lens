@@ -1,0 +1,31 @@
+src/core/annotations.ts
+  s_c801515aa6d777::t_a2013bca55416b 3-13
+styles.css
+  s_c801515aa6d777::t_b44525f5f4b927 213,217-218,222,224-237
+src/pdf/annotations.ts
+  s_c801515aa6d777::t_a2013bca55416b 14,155,174,184,196-208
+tests/pdf.test.ts
+  s_c801515aa6d777::t_a2013bca55416b 2,43-65
+src/core/types.ts
+  s_c801515aa6d777::t_a2013bca55416b 10
+src/pdf/reader.ts
+  s_c801515aa6d777::t_b44525f5f4b927 8,394-403
+src/ui/view.ts
+  s_c801515aa6d777::t_b44525f5f4b927 14,27-37,51-56,216-219,222-238,330,336-338,430-464,522,556,563-564,566-567,569,574-575,577,579
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.51-trip",
+  "base_commit_sha": "5ec54c76a335d5a074a4fdd3437e595cf0a665c9",
+  "prompts": {},
+  "sessions": {
+    "s_c801515aa6d777": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a16434-c72d-7383-a34e-9996ecf530e6",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wu <w.junjie@trip.com>"
+    }
+  }
+}
