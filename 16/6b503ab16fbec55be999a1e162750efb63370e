@@ -1,0 +1,19 @@
+styles.css
+  s_c801515aa6d777::t_21a115231a3be6 137-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.51-trip",
+  "base_commit_sha": "166b503ab16fbec55be999a1e162750efb63370e",
+  "prompts": {},
+  "sessions": {
+    "s_c801515aa6d777": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a16434-c72d-7383-a34e-9996ecf530e6",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wu <w.junjie@trip.com>"
+    }
+  }
+}
