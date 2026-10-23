@@ -1,0 +1,36 @@
+versions.json
+  s_c801515aa6d777::t_579164e8ce463e 4-5
+README.md
+  s_c801515aa6d777::t_579164e8ce463e 5-7,71
+package.json
+  s_c801515aa6d777::t_574da51491fd75 3
+manifest.json
+  s_c801515aa6d777::t_579164e8ce463e 4
+docs/VALIDATION.md
+  s_c801515aa6d777::t_c9dc6ff658f973 89-98
+package-lock.json
+  s_c801515aa6d777::t_6e2df9416a554c 3,9
+src/ui/view.ts
+  s_c801515aa6d777::t_aa3a6bcc62206a 140-142,144,146,499-502,662-663,665-666
+  s_c801515aa6d777::t_cc94f05918853c 15,72-74,86,114-116,135-136,143,145,152,239-241,243,246,380-389,503-531,664,667,793-795,797
+tests/view.test.ts
+  s_c801515aa6d777::t_aa3a6bcc62206a 6,21,55-132
+CHANGELOG.md
+  s_c801515aa6d777::t_579164e8ce463e 3-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.51-trip",
+  "base_commit_sha": "f7fe9e11b990ad33b4da628d7c1a6c4d7cabeef8",
+  "prompts": {},
+  "sessions": {
+    "s_c801515aa6d777": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a16434-c72d-7383-a34e-9996ecf530e6",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wu <w.junjie@trip.com>"
+    }
+  }
+}
