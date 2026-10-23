@@ -1,0 +1,70 @@
+tests/pipeline.test.ts
+  s_c801515aa6d777::t_76f4ff5b996491 96-103,110
+  s_c801515aa6d777::t_766ae4ddbc68b9 13,21,75-80,111
+src/translation/pipeline.ts
+  s_c801515aa6d777::t_9f0244bf1c2401 214-218
+  s_c801515aa6d777::t_926d11514c5d77 137-138
+  s_c801515aa6d777::t_09f596b9f863bb 10-11
+  s_c801515aa6d777::t_60ed40a9fb3289 208
+  s_c801515aa6d777::t_738bf739c236f8 37-41,130
+  s_c801515aa6d777::t_a2255280db7b76 190-191
+skills/paper-lens-translate/scripts/translate.py
+  s_c801515aa6d777::t_dd16db444e90f2 12,69-70,74,78,117-122,126-137,140-145
+  s_c801515aa6d777::t_2876405ef41509 71-73
+  s_c801515aa6d777::t_99c33a8dbb5303 123-125
+skills/paper-lens-translate/scripts/paragraphs.py
+  s_c801515aa6d777::t_70c635b95e7068 1-25,27-28,87-120,134-157,160,169-197,199-234,246-319,321-324
+  s_c801515aa6d777::t_c0fcda290e4bc9 198
+  s_c801515aa6d777::t_fbbabd2804b8e6 51-54,60-67
+  s_c801515aa6d777::t_d87b763efb233d 55-59,124-125
+  s_c801515aa6d777::t_1b4e1a871b97b6 29,48-50,68-83,121-123,126-127,129
+  s_c801515aa6d777::t_99c33a8dbb5303 158-159,162-168
+  s_c801515aa6d777::t_e0bcdf907b063f 26,320
+  s_c801515aa6d777::t_76499b117a7fb6 161
+  s_c801515aa6d777::t_9f0244bf1c2401 30-47,84-86,128,130-133,235-245
+src/translation/tools.ts
+  s_c801515aa6d777::t_76f4ff5b996491 66
+tests/translation.test.ts
+  s_c801515aa6d777::t_b0064526550dc1 118-125
+  s_c801515aa6d777::t_766ae4ddbc68b9 126-130
+CHANGELOG.md
+  s_c801515aa6d777::t_f95cd810188c6d 3-8
+tests/translation_layout_test.py
+  s_c801515aa6d777::t_dd16db444e90f2 13,146
+  s_c801515aa6d777::t_05164543c5c7c2 20-63,65-89
+  s_c801515aa6d777::t_9f0244bf1c2401 64
+  s_c801515aa6d777::t_7e75bf43875f4b 90-107,109-126,128-130
+  s_c801515aa6d777::t_fbbabd2804b8e6 108,127
+skills/paper-lens-translate/SKILL.md
+  s_c801515aa6d777::t_f95cd810188c6d 27
+  s_c801515aa6d777::t_60ed40a9fb3289 26
+README.md
+  s_c801515aa6d777::t_f95cd810188c6d 21,25-28,69
+docs/VALIDATION.md
+  s_c801515aa6d777::t_f9ba8833263c91 77-88
+src/translation/manager.ts
+  s_c801515aa6d777::t_b0064526550dc1 113
+  s_c801515aa6d777::t_738bf739c236f8 115
+esbuild.config.mjs
+  s_c801515aa6d777::t_76f4ff5b996491 3,8-10
+src/ui/view.ts
+  s_c801515aa6d777::t_b0064526550dc1 864-867
+package-lock.json
+  s_c801515aa6d777::t_2e096217521085 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.51-trip",
+  "base_commit_sha": "21febdac3f17b91339199cbf2f294fdfe3f5c459",
+  "prompts": {},
+  "sessions": {
+    "s_c801515aa6d777": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a16434-c72d-7383-a34e-9996ecf530e6",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wu <w.junjie@trip.com>"
+    }
+  }
+}
