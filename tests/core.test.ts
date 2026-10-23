@@ -7,7 +7,6 @@ import {
   viewportPoint,
 } from "../src/core/geometry";
 import { JsonLines } from "../src/agents/json-lines";
-import { retrievePages, citationPages } from "../src/core/context";
 
 describe("page coordinates", () => {
   it("syncs page-relative positions across different heights", () => {
@@ -77,19 +76,4 @@ describe("agent framing", () => {
     expect(errors).toHaveLength(1);
     expect(events).toEqual([{ ok: true }]);
   });
-});
-
-describe("paper context", () => {
-  it("retrieves relevant pages with bounded context", () => {
-    const pages = [
-      "abstract overview",
-      "attention transformer architecture",
-      "references",
-    ];
-    expect(retrievePages(pages, "transformer", 1).map((p) => p.page)).toContain(
-      2,
-    );
-  });
-  it("only accepts citations in range", () =>
-    expect(citationPages("[p. 2] [p. 99] [p. 0]", 4)).toEqual([2]));
 });

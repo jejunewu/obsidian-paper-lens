@@ -122,7 +122,7 @@ export default class PaperLensPlugin extends Plugin {
       const leaf = this.app.workspace.getLeaf("tab");
       await leaf.setViewState({
         type: VIEW_TYPE,
-        state: { path: normalizePath(file.path) },
+        state: { file: normalizePath(file.path) },
         active: true,
       });
       await this.app.workspace.revealLeaf(leaf);

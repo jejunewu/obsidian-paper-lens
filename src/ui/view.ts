@@ -1,5 +1,5 @@
 import {
-  ItemView,
+  FileView,
   Notice,
   TFile,
   type WorkspaceLeaf,
@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { PDFDocument } from "pdf-lib";
 import type PaperLensPlugin from "../main";
-import type { AgentKind, Annotation, PaperContext } from "../core/types";
+import type { AgentKind, Annotation } from "../core/types";
 import { AnnotationStore } from "../core/annotations";
 import { digest } from "../translation/protocol";
 import { PdfReader } from "../pdf/reader";
@@ -21,28 +21,24 @@ import {
 } from "../pdf/annotations";
 import { saveSource } from "../pdf/source";
 import { TranslationManager } from "../translation/manager";
-import { ChatPanel } from "./chat";
 import { textDialog, unsavedDialog } from "./modals";
 import { TranslationStatus } from "./translation-status";
 export const VIEW_TYPE = "paper-lens";
 
-export class PaperLensView extends ItemView {
+export class PaperLensView extends FileView {
   private path = "";
   private source?: PdfReader;
   private translation?: PdfReader;
-  private chat?: ChatPanel;
   private manager: TranslationManager;
   private store = new AnnotationStore([]);
   private sourceHash = "";
   private bytes?: Uint8Array;
-  private context?: PaperContext;
+  private pageTexts: string[] = [];
   private selected?: string;
   private kind: AgentKind;
   private zoom = 1;
   private translationPanel?: HTMLElement;
-  private chatPanel?: HTMLElement;
   private translateDivider?: HTMLElement;
-  private chatDivider?: HTMLElement;
   private saveButton?: HTMLButtonElement;
   private translateButton?: HTMLButtonElement;
   private cancelButton?: HTMLButtonElement;
@@ -53,21 +49,19 @@ export class PaperLensView extends ItemView {
   private translationLog?: HTMLElement;
   private translationDetails?: HTMLDetailsElement;
   private translationOpen = false;
-  private chatOpen = false;
   private saveBusy = false;
   private closed = false;
   private ready = false;
   private persistence = Promise.resolve();
-  private lastSelection = "";
   private restorePosition?: { page: number; fraction: number };
   private translationPermissions?: HTMLElement;
   private permissionReplies = new Set<(allow: boolean) => void>();
-  private chats = new Map<AgentKind, { panel: ChatPanel; el: HTMLElement }>();
   constructor(
     leaf: WorkspaceLeaf,
     private plugin: PaperLensPlugin,
   ) {
     super(leaf);
+    this.allowNoFile = true;
     this.kind = plugin.settings.defaultAgent;
     this.manager = new TranslationManager(plugin.agents);
   }
@@ -84,10 +78,10 @@ export class PaperLensView extends ItemView {
   }
   getState(): Record<string, unknown> {
     return {
-      path: this.path,
+      ...super.getState(),
+      file: this.path,
       position: this.source?.position() ?? this.restorePosition,
       translationOpen: this.translationOpen,
-      chatOpen: this.chatOpen,
       agent: this.kind,
       zoom: this.zoom,
     };
@@ -96,24 +90,37 @@ export class PaperLensView extends ItemView {
     state: Record<string, unknown>,
     result: ViewStateResult,
   ): Promise<void> {
-    const path = typeof state.path === "string" ? state.path : "";
+    // Restore tabs saved before Paper Lens became a standard FileView.
+    const path =
+      typeof state.file === "string" ? state.file :
+        typeof state.path === "string" ? state.path : "";
     if (state.agent === "codex" || state.agent === "claude")
       this.kind = state.agent;
     if (typeof state.zoom === "number")
       this.zoom = Math.max(0.25, Math.min(4, state.zoom));
     this.translationOpen = state.translationOpen === true;
-    this.chatOpen = state.chatOpen === true;
     const pos = state.position as
       | { page?: number; fraction?: number }
       | undefined;
     if (pos && Number.isInteger(pos.page) && typeof pos.fraction === "number")
       this.restorePosition = { page: pos.page!, fraction: pos.fraction };
-    if (path && path !== this.path) {
-      if (this.store.dirty && !(await this.resolveUnsaved())) return;
-      this.path = path;
-      if (this.source) await this.loadPaper();
-    }
-    await super.setState(state, result);
+    if (
+      path && path !== this.path && this.store.dirty &&
+      !(await this.resolveUnsaved())
+    ) return;
+    await super.setState({ ...state, file: path }, result);
+  }
+  canAcceptExtension(extension: string): boolean {
+    return extension.toLowerCase() === "pdf";
+  }
+  async onLoadFile(file: TFile): Promise<void> {
+    this.path = file.path;
+    if (this.source) await this.loadPaper();
+  }
+  async onUnloadFile(): Promise<void> {
+    this.ready = false;
+    this.clearTranslationPermissions();
+    this.manager.dispose();
   }
   async onOpen(): Promise<void> {
     this.closed = false;
@@ -214,14 +221,7 @@ export class PaperLensView extends ItemView {
     agent.value = this.kind;
     agent.addEventListener("change", () => {
       this.kind = agent.value as AgentKind;
-      if (this.context) void this.switchChat().catch((e) => this.error(e));
     });
-    const toggleChat = this.button(toolbar, "对话", () => {
-      this.chatOpen = !this.chatOpen;
-      this.panels();
-      toggleChat.setAttribute("aria-expanded", String(this.chatOpen));
-    });
-    toggleChat.setAttribute("aria-expanded", String(this.chatOpen));
     const toggleTranslation = this.button(toolbar, "译文", () => {
       this.translationOpen = !this.translationOpen;
       this.panels();
@@ -279,24 +279,13 @@ export class PaperLensView extends ItemView {
       this.plugin.resourceRoot,
       true,
     );
-    this.chatDivider = this.divider(
-      panels,
-      this.translationPanel,
-      () => this.chatPanel!,
-    );
-    this.chatPanel = panels.createDiv({ cls: "pl-panel pl-chat-panel" });
     this.source.onPosition = (pos) => {
       this.translation?.navigate(pos);
       if (this.pageInput) this.pageInput.value = String(pos.page);
-      if (this.context) {
-        this.context.currentPage = pos.page;
-        this.chat?.updateContext(this.context);
-      }
     };
     this.translation.onPosition = (pos) => {
       this.source?.navigate(pos);
       if (this.pageInput) this.pageInput.value = String(pos.page);
-      if (this.context) this.context.currentPage = pos.page;
     };
     this.source.onAnnotation = (id, edit) => {
       this.selected = id;
@@ -321,16 +310,6 @@ export class PaperLensView extends ItemView {
       });
       this.annotationsChanged();
     };
-    this.registerDomEvent(this.contentEl, "mouseup", () => {
-      const selection = this.source?.selection();
-      if (selection) {
-        this.lastSelection = selection.text;
-        if (this.context) {
-          this.context.selection = selection.text;
-          this.chat?.updateContext(this.context);
-        }
-      }
-    });
     this.registerDomEvent(panels, "dragover", (e) => {
       e.preventDefault();
     });
@@ -403,27 +382,9 @@ export class PaperLensView extends ItemView {
     return bar;
   }
   private panels(): void {
-    if (!this.translationPanel || !this.chatPanel) return;
+    if (!this.translationPanel) return;
     this.translationPanel.hidden = !this.translationOpen;
     this.translateDivider!.hidden = !this.translationOpen;
-    this.chatPanel.hidden = !this.chatOpen;
-    this.chatDivider!.hidden = !this.chatOpen;
-  }
-  private async switchChat(): Promise<void> {
-    if (!this.chatPanel || !this.context) return;
-    let entry = this.chats.get(this.kind);
-    if (!entry) {
-      const el = this.chatPanel.createDiv({ cls: "pl-agent-chat" });
-      const panel = new ChatPanel(el, this.plugin, (page) =>
-        this.navigate(page),
-      );
-      entry = { el, panel };
-      this.chats.set(this.kind, entry);
-      await panel.load(this.context, this.kind);
-    }
-    for (const [kind, chat] of this.chats) chat.el.hidden = kind !== this.kind;
-    this.chat = this.chats.get(this.kind)!.panel;
-    this.chat.updateContext(this.context);
   }
   private async loadPaper(): Promise<void> {
     this.ready = false;
@@ -441,14 +402,7 @@ export class PaperLensView extends ItemView {
       );
       if (this.closed) return;
       this.store = new AnnotationStore(await readAnnotations(this.bytes));
-      const documentId = `${this.plugin.basePath}/${this.path}#${this.sourceHash}`;
-      this.context = {
-        documentId,
-        title: file.basename,
-        pages,
-        currentPage: 1,
-        selection: "",
-      };
+      this.pageTexts = pages;
       try {
         const pending = JSON.parse(
           await readFile(this.pendingPath(), "utf8"),
@@ -469,12 +423,6 @@ export class PaperLensView extends ItemView {
       this.source!.setZoom(this.zoom);
       this.translation!.setZoom(this.zoom);
       this.annotationsChanged();
-      for (const entry of this.chats.values()) {
-        entry.panel.dispose();
-        entry.el.remove();
-      }
-      this.chats.clear();
-      await this.switchChat();
       if (this.pageInput) this.pageInput.max = String(pages.length);
       this.ready = true;
       this.status!.textContent = `${file.basename} · ${pages.length} 页${pages.some((text) => !text.trim()) ? " · 含无文本页，扫描页不支持翻译" : ""}`;
@@ -602,17 +550,12 @@ export class PaperLensView extends ItemView {
     this.source?.navigate(pos);
     this.translation?.navigate(pos);
     if (this.pageInput) this.pageInput.value = String(page);
-    if (this.context) {
-      this.context.currentPage = page;
-      this.context.selection = this.lastSelection;
-      this.chat?.updateContext(this.context);
-    }
   }
   private async translate(restoreOnly = false): Promise<void> {
-    if (!this.ready || !this.bytes || !this.context)
+    if (!this.ready || !this.bytes)
       throw new Error("请先打开可选中文字的论文 PDF");
     if (this.manager.active) throw new Error("当前论文已有翻译任务");
-    if (this.context.pages.some((text) => !text.trim())) {
+    if (this.pageTexts.some((text) => !text.trim())) {
       if (restoreOnly) return;
       throw new Error("扫描页不支持翻译，请使用可选中文字的英文 PDF");
     }
@@ -775,7 +718,6 @@ export class PaperLensView extends ItemView {
     this.closed = true;
     this.clearTranslationPermissions();
     this.manager.dispose();
-    for (const entry of this.chats.values()) entry.panel.dispose();
     this.source?.dispose();
     this.translation?.dispose();
   }

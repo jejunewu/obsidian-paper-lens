@@ -48,6 +48,7 @@ export class PdfReader {
     private readonly readonly = false,
   ) {
     el.classList.add("pl-reader");
+    this.setTool("select");
     el.tabIndex = 0;
     el.setAttribute("aria-label", readonly ? "译文阅读区域" : "原文阅读区域");
     this.observer = new IntersectionObserver(

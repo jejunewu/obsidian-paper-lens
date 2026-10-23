@@ -21,3 +21,13 @@
 独立测试 Vault 的三页 `sample.pdf` 已通过真实 Codex 翻译闭环：准备依赖、工具权限回调、逐页视觉检查/发布、合并、译文栏展示，最终自动保存为 `sample.zh-CN.pdf`。重新打开保存文件验证三页均包含中文正文，尺寸均为 600 × 800；桌面截图确认中文和原线图正常显示。此简单样本不能替代复杂论文验收。
 
 仍需实机验收：macOS Preview 中文批注显示，Obsidian 1.12.7、真实公式密集页/复杂表格/长论文的翻译质量，以及正常账号下的权限回调和完整任务闭环。复杂布局无法达到可读性检查时工具明确失败，不标为完成。
+
+## Claudian 选区兼容更新（2026-10-23）
+
+移除 Paper Lens 自带聊天面板、消息存储和正文检索代码。阅读视图改为标准 Obsidian FileView，仍以 `paper-lens` 独立视图打开，兼容旧工作区的 `path` 状态；不注册为默认 PDF 阅读器。选择模式显式启用 PDF 文本层的 `user-select`，初次打开即生效。
+
+独立测试 Vault `/tmp/Paper Lens Acceptance`、Obsidian 1.14.4、Claudian 2.3.28：在 Paper Lens 的合成 PDF 第二页三击选中 Results 段落后，Claudian 自动显示 `1 line selected`。空白会话只询问选区内容、禁止工具和文件读取，Claudian 正确回复 Dataset Aurora、70% → 82%、增加 12 个百分点及 `Claudian PDF Acceptance.pdf`。另外实测鼠标拖选 Limitation 段落、切换拖动模式并平移、选区添加荧光笔及撤销、译文面板展开、关闭并重新打开 PDF。自带对话入口和第三栏均已移除。
+
+28 个 Vitest 测试（8 个文件）通过，类型检查和生产构建通过。其中两个旧自带对话检索测试随模块移除，新增两个文件视图状态测试，验证旧标签恢复和当前文件优先，避免其他插件获得错误 PDF 路径。自动化文件视图测试使用 Obsidian API 替身，真实 Claudian 兼容性由上述桌面验收确认。
+
+Claudian 当前自动选区上下文包含文字与文件路径，不含 PDF 页码；未修改 Claudian，也未增加对其私有接口的依赖。旧 Paper Lens 聊天文件未删除。最低 Obsidian 版本及其他 Claudian 版本的兼容性尚未实机复测。

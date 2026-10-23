@@ -12,21 +12,6 @@ export interface PageSize {
   width: number;
   height: number;
 }
-export interface PaperContext {
-  documentId: string;
-  title: string;
-  pages: string[];
-  currentPage: number;
-  selection: string;
-}
-export interface ChatMessage {
-  role: "user" | "assistant";
-  text: string;
-}
-export interface ChatSession {
-  id?: string;
-  messages: ChatMessage[];
-}
 export type AgentEvent =
   | { type: "delta"; text: string }
   | { type: "status"; text: string }

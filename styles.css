@@ -84,17 +84,7 @@
 .pl-translation-panel {
   flex: 35 1 0;
 }
-.pl-chat-panel {
-  flex: 25 1 0;
-}
-.pl-agent-chat {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
-.pl-panel-header,
-.pl-chat-header {
+.pl-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -104,8 +94,7 @@
   border-bottom: 1px solid var(--background-modifier-border);
   font-size: var(--font-ui-small);
 }
-.pl-panel-header button,
-.pl-chat-header button {
+.pl-panel-header button {
   font-size: var(--font-ui-smaller);
 }
 .pl-divider {
@@ -240,64 +229,9 @@
 .pl-reader[data-tool="text"] .pl-annotation {
   pointer-events: none;
 }
-.pl-transcript {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 12px;
-}
-.pl-message {
-  margin-bottom: 16px;
-}
-.pl-message small {
-  display: block;
-  color: var(--text-muted);
-  margin-bottom: 4px;
-}
-.pl-message-body {
-  font-size: var(--font-ui-small);
-  line-height: 1.65;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  user-select: text;
-}
-.pl-message-user .pl-message-body {
-  border-left: 2px solid var(--interactive-accent);
-  padding-left: 8px;
-}
-.pl-citation {
-  padding: 0 4px;
-  height: auto;
-  font-size: inherit;
-  color: var(--text-accent);
-  box-shadow: none;
-}
-.pl-chat-status {
-  padding: 4px 12px;
-  color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
-  overflow-wrap: anywhere;
-  max-height: 90px;
-  overflow: auto;
-}
-.pl-composer {
-  padding: 8px;
-  border-top: 1px solid var(--background-modifier-border);
-}
-.pl-composer textarea,
 .pl-modal-text {
   width: 100%;
   resize: vertical;
-}
-.pl-chat-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 4px;
-}
-.pl-permissions {
-  max-height: 35%;
-  overflow: auto;
 }
 .pl-translation-permissions {
   max-height: 30%;
