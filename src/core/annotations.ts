@@ -1,5 +1,16 @@
 import type { Annotation } from "./types";
 
+export function textStyle(item: Annotation): {
+  fontSize: number; color: Annotation["color"];
+} {
+  // Older text annotations stored a yellow placeholder but rendered in black.
+  return {
+    fontSize: Number.isFinite(item.fontSize)
+      ? Math.max(6, Math.min(96, item.fontSize!)) : 12,
+    color: item.fontSize === undefined ? [0.1, 0.1, 0.1] : item.color,
+  };
+}
+
 export class AnnotationStore {
   items: Annotation[];
   private history: Annotation[][] = [];

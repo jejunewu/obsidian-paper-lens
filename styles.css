@@ -210,17 +210,31 @@
   cursor: pointer;
 }
 .pl-highlight {
-  background: rgba(255, 210, 30, 0.3) !important;
+  background: var(--pl-highlight) !important;
   mix-blend-mode: multiply;
 }
 .pl-text {
-  background: rgba(255, 255, 255, 0.92) !important;
-  color: #171717 !important;
+  background: transparent !important;
+  color: var(--pl-color) !important;
   font-family: "PaperLensChinese", sans-serif;
   text-align: left;
   white-space: pre-wrap;
-  overflow: hidden;
+  overflow: visible;
   line-height: 1.25;
+  display: block;
+  cursor: move;
+}
+.pl-text-content {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  box-sizing: border-box;
+}
+.pl-toolbar .pl-font-size {
+  width: 60px;
+  height: 28px;
 }
 .pl-annotation.is-selected {
   outline: 2px solid #247bcc;

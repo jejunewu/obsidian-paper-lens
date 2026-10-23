@@ -11,6 +11,7 @@ import {
 } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import type { Annotation } from "../core/types";
+import { textStyle } from "../core/annotations";
 import { digest } from "../translation/protocol";
 
 function owned(dict: PDFDict): boolean {
@@ -122,7 +123,6 @@ export async function writeAnnotations(
       Contents: PDFHexString.fromText(item.text),
       T: PDFHexString.fromText("Paper Lens"),
       F: 4,
-      C: item.color,
       PaperLensData: PDFHexString.fromText(JSON.stringify(item)),
     };
     let appearance;
@@ -152,7 +152,7 @@ export async function writeAnnotations(
       const temp = doc.addPage([width, height]);
       const lines: string[] = [];
       let line = "";
-      const size = Math.min(12, height - 4);
+      const { fontSize: size, color } = textStyle(item);
       for (const ch of item.text) {
         if (
           ch === "\n" ||
@@ -171,7 +171,7 @@ export async function writeAnnotations(
         font,
         size,
         lineHeight: size * 1.25,
-        color: rgb(0.1, 0.1, 0.1),
+        color: rgb(...color),
       });
       const embedded = await doc.embedPage(temp);
       await embedded.embed();
@@ -181,6 +181,7 @@ export async function writeAnnotations(
     const extra =
       item.kind === "highlight"
         ? {
+            C: item.color,
             QuadPoints: item.rects.flatMap((r) => [
               r[0],
               r[3],
@@ -192,7 +193,19 @@ export async function writeAnnotations(
               r[1],
             ]),
           }
-        : { DA: PDFString.of("/F0 12 Tf 0.1 0.1 0.1 rg"), Q: 0 };
+        : {
+            DA: PDFString.of(`/PaperLensText ${textStyle(item).fontSize} Tf ${textStyle(item).color.join(" ")} rg`),
+            Q: 0, Border: [0, 0, 0],
+          };
+    if (item.kind === "text" && font) {
+      const resources = page.node.Resources()!;
+      let fonts = resources.lookupMaybe(PDFName.of("Font"), PDFDict);
+      if (!fonts) {
+        fonts = doc.context.obj({});
+        resources.set(PDFName.of("Font"), fonts);
+      }
+      fonts.set(PDFName.of("PaperLensText"), font.ref);
+    }
     const dict = doc.context.obj({
       ...common,
       ...extra,

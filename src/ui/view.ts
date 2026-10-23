@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { PDFDocument } from "pdf-lib";
 import type PaperLensPlugin from "../main";
 import type { AgentKind, Annotation } from "../core/types";
-import { AnnotationStore } from "../core/annotations";
+import { AnnotationStore, textStyle } from "../core/annotations";
 import { digest } from "../translation/protocol";
 import { PdfReader } from "../pdf/reader";
 import {
@@ -24,6 +24,17 @@ import { TranslationManager } from "../translation/manager";
 import { textDialog, unsavedDialog } from "./modals";
 import { TranslationStatus } from "./translation-status";
 export const VIEW_TYPE = "paper-lens";
+const COLORS = [
+  ["黄", "#ffd933"], ["绿", "#66cc80"], ["蓝", "#3388dd"],
+  ["粉", "#ee77bb"], ["橙", "#ff9933"], ["红", "#cc3333"],
+  ["紫", "#9955cc"], ["黑", "#1a1a1a"],
+] as const;
+function rgbColor(hex: string): Annotation["color"] {
+  return [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255) as Annotation["color"];
+}
+function hexColor(color: Annotation["color"]): string {
+  return "#" + color.map((c) => Math.round(c * 255).toString(16).padStart(2, "0")).join("");
+}
 
 export class PaperLensView extends FileView {
   private path = "";
@@ -37,6 +48,12 @@ export class PaperLensView extends FileView {
   private selected?: string;
   private kind: AgentKind;
   private zoom = 1;
+  private highlightColor = "#ffd933";
+  private textColor = "#1a1a1a";
+  private fontSize = 12;
+  private highlightInput?: HTMLSelectElement;
+  private textColorInput?: HTMLSelectElement;
+  private fontSizeInput?: HTMLInputElement;
   private translationPanel?: HTMLElement;
   private translateDivider?: HTMLElement;
   private saveButton?: HTMLButtonElement;
@@ -196,8 +213,29 @@ export class PaperLensView extends FileView {
       this.navigate(Number(this.pageInput!.value)),
     );
     this.button(toolbar, "荧光笔", () => this.highlight());
+    this.highlightInput = this.colorControl(toolbar, "高亮颜色", this.highlightColor, (color) => {
+      this.highlightColor = color;
+      this.updateStyle("highlight", { color: rgbColor(color) });
+    });
     const text = this.button(toolbar, "插入文本", () => setTool("text", text));
     toolButtons.push(text);
+    this.textColorInput = this.colorControl(toolbar, "文字颜色", this.textColor, (color) => {
+      this.textColor = color;
+      this.updateStyle("text", { color: rgbColor(color), fontSize: this.fontSize });
+    });
+    this.fontSizeInput = toolbar.createEl("input", {
+      type: "number", value: String(this.fontSize), cls: "pl-font-size",
+      attr: { "aria-label": "文字字号（pt）", title: "文字字号（pt）", min: "6", max: "96", step: "1" },
+    });
+    this.fontSizeInput.addEventListener("change", () => {
+      const size = Number(this.fontSizeInput!.value);
+      if (Number.isFinite(size) && size >= 6 && size <= 96) {
+        this.fontSize = size;
+        this.updateStyle("text", { fontSize: size, color: rgbColor(this.textColor) });
+      }
+      this.fontSizeInput!.value = String(this.fontSize);
+    });
+    toolbar.createEl("span", { text: "pt" });
     this.button(toolbar, "删除", () => {
       if (this.saveBusy) throw new Error("批注正在保存，请稍候");
       if (!this.selected) throw new Error("请先选择 Paper Lens 批注");
@@ -289,12 +327,15 @@ export class PaperLensView extends FileView {
     };
     this.source.onAnnotation = (id, edit) => {
       this.selected = id;
+      this.syncStyleControls();
       this.source?.setAnnotations(this.store.items, id);
       if (edit && !this.saveBusy)
         void this.editText(id).catch((e) => this.error(e));
     };
     this.source.onInsert = (page, point) => {
-      void this.insertText(page, point).catch((e) => this.error(e));
+      void this.insertText(page, point).then((created) => {
+        if (created) setTool("select", select);
+      }).catch((e) => this.error(e));
     };
     this.source.onMove = (id, delta) => {
       const item = this.store.items.find((x) => x.id === id);
@@ -386,6 +427,41 @@ export class PaperLensView extends FileView {
     this.translationPanel.hidden = !this.translationOpen;
     this.translateDivider!.hidden = !this.translationOpen;
   }
+  private colorControl(parent: HTMLElement, label: string, value: string,
+    change: (value: string) => void): HTMLSelectElement {
+    const input = parent.createEl("select", { attr: { "aria-label": label, title: label } });
+    for (const [name, color] of COLORS)
+      input.createEl("option", { text: `${label}：${name}`, value: color });
+    input.value = value;
+    input.addEventListener("change", () => change(input.value));
+    return input;
+  }
+  private updateStyle(kind: Annotation["kind"], style: Partial<Annotation>): void {
+    const item = this.store.items.find((x) => x.id === this.selected && x.kind === kind);
+    if (!item || this.saveBusy) return;
+    this.store.upsert({ ...item, ...style });
+    this.annotationsChanged();
+  }
+  private syncStyleControls(): void {
+    const item = this.store.items.find((x) => x.id === this.selected);
+    if (!item) return;
+    const setColor = (input: HTMLSelectElement | undefined, color: string) => {
+      if (!input) return;
+      if (![...input.options].some((option) => option.value === color))
+        input.createEl("option", { text: "当前颜色", value: color });
+      input.value = color;
+    };
+    if (item.kind === "highlight") {
+      this.highlightColor = hexColor(item.color);
+      setColor(this.highlightInput, this.highlightColor);
+    } else {
+      const style = textStyle(item);
+      this.textColor = hexColor(style.color);
+      this.fontSize = style.fontSize;
+      setColor(this.textColorInput, this.textColor);
+      if (this.fontSizeInput) this.fontSizeInput.value = String(this.fontSize);
+    }
+  }
   private async loadPaper(): Promise<void> {
     this.ready = false;
     this.status!.textContent = "正在加载论文…";
@@ -443,6 +519,7 @@ export class PaperLensView extends FileView {
     );
   }
   private annotationsChanged(): void {
+    this.syncStyleControls();
     this.source?.setAnnotations(this.store.items, this.selected);
     if (this.saveButton) {
       this.saveButton.textContent = this.store.dirty ? "保存 *" : "保存";
@@ -476,26 +553,30 @@ export class PaperLensView extends FileView {
       kind: "highlight",
       rects: selection.rects,
       text: selection.text,
-      color: [1, 0.85, 0.2],
+      color: rgbColor(this.highlightColor),
     });
     this.annotationsChanged();
   }
   private async insertText(
     page: number,
     point: [number, number],
-  ): Promise<void> {
-    if (this.saveBusy) return;
+  ): Promise<boolean> {
+    if (this.saveBusy) return false;
     const text = await textDialog(this.app, "");
-    if (!text || this.closed || this.saveBusy) return;
+    if (!text || this.closed || this.saveBusy) return false;
+    const id = randomUUID();
     this.store.upsert({
-      id: randomUUID(),
+      id,
       page,
       kind: "text",
       rects: [[point[0], point[1] - 60, point[0] + 240, point[1]]],
       text,
-      color: [1, 1, 0],
+      color: rgbColor(this.textColor),
+      fontSize: this.fontSize,
     });
+    this.selected = id;
     this.annotationsChanged();
+    return true;
   }
   private async editText(id: string): Promise<void> {
     const item = this.store.items.find((x) => x.id === id);

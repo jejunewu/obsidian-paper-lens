@@ -7,6 +7,7 @@ export interface Annotation {
   rects: Rect[];
   text: string;
   color: [number, number, number];
+  fontSize?: number;
 }
 export interface PageSize {
   width: number;

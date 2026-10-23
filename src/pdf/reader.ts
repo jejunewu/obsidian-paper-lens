@@ -5,6 +5,7 @@ import type {
   RenderTask,
 } from "pdfjs-dist";
 import type { Annotation, PageSize, Rect } from "../core/types";
+import { textStyle } from "../core/annotations";
 import {
   locatePosition,
   positionOffset,
@@ -390,8 +391,16 @@ export class PdfReader {
           slot.viewport.convertToViewportRectangle(rect) as Rect,
         );
         if (item.kind === "text") {
-          el.textContent = item.text;
-          el.style.fontSize = `${12 * this.scale}px`;
+          const content = document.createElement("span");
+          content.className = "pl-text-content";
+          content.textContent = item.text;
+          el.append(content);
+          const style = textStyle(item);
+          el.style.fontSize = `${style.fontSize * this.scale}px`;
+          el.style.setProperty("--pl-color", `rgb(${style.color.map((c) => c * 255).join(" ")})`);
+          content.style.padding = `${2 * this.scale}px ${4 * this.scale}px`;
+        } else {
+          el.style.setProperty("--pl-highlight", `rgb(${item.color.map((c) => c * 255).join(" ")} / 0.32)`);
         }
         el.addEventListener("click", (e) => {
           e.stopPropagation();

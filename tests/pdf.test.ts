@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { PDFDocument, PDFName, PDFString } from "pdf-lib";
+import { PDFDict, PDFDocument, PDFName, PDFString } from "pdf-lib";
 import {
   readFile,
   mkdtemp,
@@ -40,6 +40,29 @@ async function pdf(pages = 1) {
 }
 
 describe("PDF annotations", () => {
+  it("preserves colored highlights and transparent text with its chosen size", async () => {
+    const items = [
+      { id: "green", page: 1, kind: "highlight" as const,
+        rects: [[10, 10, 100, 30] as [number, number, number, number]],
+        text: "highlight", color: [0.2, 1, 0.4] as [number, number, number] },
+      { id: "red", page: 1, kind: "text" as const,
+        rects: [[40, 80, 280, 180] as [number, number, number, number]],
+        text: "红色文字", color: [0.8, 0.1, 0.1] as [number, number, number], fontSize: 24 },
+    ];
+    const result = await writeAnnotations(await pdf(), items,
+      await readFile("assets/NotoSansCJKsc-Regular.otf"));
+    expect(await readAnnotations(result)).toEqual(items);
+    const loaded = await PDFDocument.load(result);
+    const text = loaded.getPage(0).node.Annots()!.lookup(1, PDFDict);
+    expect(text.get(PDFName.of("C"))).toBeUndefined(); // No background fill color.
+    expect(text.lookup(PDFName.of("DA"), PDFString).decodeText())
+      .toBe("/PaperLensText 24 Tf 0.8 0.1 0.1 rg");
+    expect(loaded.getPage(0).node.Resources()!.lookup(PDFName.of("Font"), PDFDict)
+      .has(PDFName.of("PaperLensText"))).toBe(true);
+    await expect(writeAnnotations(result, [{ ...items[1]!, rects: [[0, 0, 30, 10]] }],
+      await readFile("assets/NotoSansCJKsc-Regular.otf")))
+      .rejects.toThrow("文字批注超出区域");
+  }, 20000);
   it("exports Chinese appearance streams and preserves unrelated annotations", async () => {
     const d = await PDFDocument.create();
     const page = d.addPage([600, 800]);
