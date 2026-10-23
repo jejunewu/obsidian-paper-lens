@@ -11,6 +11,10 @@ export interface PaperLensSettings {
   claudePath: string;
   codexModel: string;
   claudeModel: string;
+  codexEffort: string;
+  claudeEffort: string;
+  translationFullAccess: boolean;
+  translationConcurrency: number;
   skillPath: string;
   workDir: string;
 }
@@ -20,6 +24,10 @@ export const DEFAULT_SETTINGS: PaperLensSettings = {
   claudePath: "",
   codexModel: "",
   claudeModel: "",
+  codexEffort: "",
+  claudeEffort: "",
+  translationFullAccess: true,
+  translationConcurrency: 2,
   skillPath: "",
   workDir: join(homedir(), "Library/Application Support/Paper Lens"),
 };
@@ -47,7 +55,7 @@ export class PaperLensSettingsTab extends PluginSettingTab {
         }),
     );
     const fields: [
-      keyof Omit<PaperLensSettings, "defaultAgent">,
+      "codexPath" | "claudePath" | "codexModel" | "claudeModel" | "skillPath" | "workDir",
       string,
       string,
     ][] = [
@@ -71,7 +79,7 @@ export class PaperLensSettingsTab extends PluginSettingTab {
       [
         "workDir",
         "工作目录",
-        "论文快照、聊天索引、翻译检查点和工具缓存所在目录",
+        "论文快照、翻译检查点和工具缓存所在目录",
       ],
     ];
     for (const [key, name, description] of fields)
@@ -87,6 +95,21 @@ export class PaperLensSettingsTab extends PluginSettingTab {
               await this.plugin.saveSettings();
             }),
         );
+    new Setting(containerEl).setName("翻译完整权限（免审批）")
+      .setDesc("允许翻译 Agent 访问本机文件、网络并执行命令，后续翻译不逐次询问工具权限。仅作用于 Paper Lens 翻译，不修改全局 CLI 配置；系统及组织限制仍有效。")
+      .addToggle((toggle) => toggle.setValue(this.plugin.settings.translationFullAccess)
+        .onChange(async (value) => {
+          this.plugin.settings.translationFullAccess = value;
+          await this.plugin.saveSettings();
+        }));
+    new Setting(containerEl).setName("翻译并行页数")
+      .setDesc("默认 2 页，可选 1–4 页；较高并发可能触发模型限流。")
+      .addDropdown((drop) => drop.addOptions({ "1": "1", "2": "2", "3": "3", "4": "4" })
+        .setValue(String(this.plugin.settings.translationConcurrency))
+        .onChange(async (value) => {
+          this.plugin.settings.translationConcurrency = Number(value);
+          await this.plugin.saveSettings();
+        }));
     new Setting(containerEl)
       .setName("检测本地 Agent")
       .setDesc("检查可执行文件；登录和模型可用性会在任务启动时验证。")

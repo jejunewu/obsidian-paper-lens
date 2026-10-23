@@ -2,9 +2,23 @@ import type { AgentKind, AgentRun, AgentTask, AgentEvent } from "../core/types";
 import { executable, resolveAgentEnvironment } from "./executables";
 import { runCodex } from "./codex";
 import { runClaude } from "./claude";
+import { discoverModels } from "./models";
+import type { AgentModel } from "../core/types";
+import { mkdir } from "node:fs/promises";
 export class AgentService {
   private runs = new Set<AgentRun>();
   private disposed = false;
+  private catalogs = new Map<string, Promise<AgentModel[]>>();
+  models(kind: AgentKind, configured: string, sdkPath: string, cwd: string, refresh = false): Promise<AgentModel[]> {
+    const key = `${kind}:${configured}:${sdkPath}`;
+    if (refresh) this.catalogs.delete(key);
+    if (!this.catalogs.has(key)) this.catalogs.set(key, (async () => {
+      await mkdir(cwd, { recursive: true });
+      const env = await resolveAgentEnvironment();
+      return discoverModels(kind, await executable(kind, configured, env), sdkPath, cwd, env);
+    })().catch((error) => { this.catalogs.delete(key); throw error; }));
+    return this.catalogs.get(key)!;
+  }
   async run(
     kind: AgentKind,
     configured: string,

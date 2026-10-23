@@ -32,6 +32,9 @@ export interface TranslationOptions {
   kind: AgentKind;
   cliPath: string;
   model?: string;
+  effort?: string;
+  fullAccess?: boolean;
+  concurrency?: number;
 }
 export interface TranslationCallbacks {
   event: (e: AgentEvent) => void;
@@ -208,6 +211,8 @@ export class TranslationManager {
         {
           cwd: folder,
           model: options.model,
+          effort: options.effort,
+          fullAccess: options.fullAccess,
           skillPath: options.skillPath,
           prompt: `请完整执行 paper-lens-translate skill。任务：${join(folder, "job.json")}。原文快照：${job.sourcePath}。工具缓存允许使用：${job.toolDir}。中文字体：${job.fontPath}。逐页英译简中，保留页序、尺寸、图表、公式；视觉检查后发布每页，并最终 merge。若存在已完成产物，验证并复用；修复失败页。不要仅回复翻译说明，必须实际交付协议产物。`,
         },

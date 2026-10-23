@@ -254,6 +254,10 @@
   width: 68px;
   height: 28px;
 }
+.pl-toolbar .pl-model-input {
+  width: 160px;
+  height: 28px;
+}
 .pl-reader[data-tool="pan"] .pl-annotation,
 .pl-reader[data-tool="text"] .pl-annotation {
   pointer-events: none;

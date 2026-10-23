@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { PDFDocument } from "pdf-lib";
 import type PaperLensPlugin from "../main";
-import type { AgentKind, Annotation } from "../core/types";
+import type { AgentKind, AgentModel, Annotation } from "../core/types";
 import { AnnotationStore, textStyle } from "../core/annotations";
 import { clampZoom } from "../core/geometry";
 import { digest } from "../translation/protocol";
@@ -48,6 +48,13 @@ export class PaperLensView extends FileView {
   private pageTexts: string[] = [];
   private selected?: string;
   private kind: AgentKind;
+  private modelInput?: HTMLSelectElement;
+  private customModelInput?: HTMLInputElement;
+  private effortInput?: HTMLSelectElement;
+  private agentInput?: HTMLSelectElement;
+  private modelCatalog: AgentModel[] = [];
+  private catalogVersion = 0;
+  private catalogReady = false;
   private zoom = 1;
   private zoomInput?: HTMLInputElement;
   private highlightColor = "#ffd933";
@@ -274,9 +281,27 @@ export class PaperLensView extends FileView {
     agent.createEl("option", { text: "Codex", value: "codex" });
     agent.createEl("option", { text: "Claude Code", value: "claude" });
     agent.value = this.kind;
+    this.agentInput = agent;
     agent.addEventListener("change", () => {
       this.kind = agent.value as AgentKind;
+      void this.loadModels();
     });
+    this.modelInput = toolbar.createEl("select", { attr: { "aria-label": "翻译模型" } });
+    this.modelInput.addEventListener("change", () => {
+      if (this.customModelInput) this.customModelInput.hidden = this.modelInput!.value !== "custom";
+      this.rememberModel();
+      this.fillEfforts();
+    });
+    this.customModelInput = toolbar.createEl("input", { type: "text", cls: "pl-model-input",
+      attr: { "aria-label": "自定义翻译模型 ID", placeholder: "模型 ID" } });
+    this.customModelInput.addEventListener("change", () => { this.rememberModel(); this.fillEfforts(); });
+    this.effortInput = toolbar.createEl("select", { attr: { "aria-label": "翻译推理强度" } });
+    this.effortInput.addEventListener("change", () => {
+      this.plugin.settings[this.kind === "codex" ? "codexEffort" : "claudeEffort"] = this.effortInput!.value;
+      void this.plugin.saveSettings().catch((e) => this.error(e));
+    });
+    this.button(toolbar, "刷新模型", () => this.loadModels(true));
+    void this.loadModels();
     const toggleTranslation = this.button(toolbar, "译文", () => {
       this.translationOpen = !this.translationOpen;
       this.panels();
@@ -451,6 +476,56 @@ export class PaperLensView extends FileView {
     if (!this.translationPanel) return;
     this.translationPanel.hidden = !this.translationOpen;
     this.translateDivider!.hidden = !this.translationOpen;
+  }
+  private rememberModel(): void {
+    const model = this.modelInput!.value === "custom"
+      ? this.customModelInput!.value.trim() : this.modelInput!.value;
+    this.plugin.settings[this.kind === "codex" ? "codexModel" : "claudeModel"] = model;
+    void this.plugin.saveSettings().catch((e) => this.error(e));
+  }
+  private fillEfforts(): void {
+    if (!this.effortInput) return;
+    this.effortInput.replaceChildren();
+    this.effortInput.createEl("option", { text: "推理：沿用本地配置", value: "" });
+    const model = this.plugin.model(this.kind);
+    const options = this.modelCatalog.find((m) => m.id === model)?.efforts ?? [];
+    for (const effort of options) this.effortInput.createEl("option", { text: `推理：${effort}`, value: effort });
+    const key = this.kind === "codex" ? "codexEffort" : "claudeEffort";
+    if (this.catalogReady && !options.includes(this.plugin.settings[key])) this.plugin.settings[key] = "";
+    this.effortInput.value = this.plugin.settings[key];
+    this.effortInput.disabled = !options.length;
+  }
+  private async loadModels(refresh = false): Promise<void> {
+    if (!this.modelInput || !this.customModelInput) return;
+    const version = ++this.catalogVersion, kind = this.kind;
+    const fill = () => {
+      const model = this.plugin.model(kind) ?? "";
+      this.modelInput!.replaceChildren();
+      this.modelInput!.createEl("option", { text: "模型：沿用本地配置", value: "" });
+      for (const item of this.modelCatalog) this.modelInput!.createEl("option", { text: item.name, value: item.id });
+      this.modelInput!.createEl("option", { text: "自定义模型…", value: "custom" });
+      const custom = !!model && !this.modelCatalog.some((m) => m.id === model);
+      this.modelInput!.value = custom ? "custom" : model;
+      this.customModelInput!.value = custom ? model : "";
+      this.customModelInput!.hidden = !custom;
+      this.fillEfforts();
+    };
+    this.modelCatalog = [];
+    this.catalogReady = false;
+    fill();
+    this.modelInput.title = "正在读取本地 Agent 模型列表…";
+    try {
+      const models = await this.plugin.agents.models(kind, this.plugin.cliPath(kind),
+        this.plugin.sdkPath, this.plugin.workRoot, refresh);
+      if (this.closed || version !== this.catalogVersion) return;
+      this.modelCatalog = models;
+      this.catalogReady = true;
+      fill();
+      this.modelInput.title = "翻译模型（模型是否可用由当前 provider 验证）";
+    } catch (e) {
+      if (this.closed || version !== this.catalogVersion) return;
+      this.modelInput.title = `模型列表读取失败，可沿用本地配置或填写自定义模型：${String(e)}`;
+    }
   }
   private colorControl(parent: HTMLElement, label: string, value: string,
     change: (value: string) => void): HTMLSelectElement {
@@ -667,6 +742,8 @@ export class PaperLensView extends FileView {
       throw new Error("扫描页不支持翻译，请使用可选中文字的英文 PDF");
     }
     if (!restoreOnly) {
+      const model = this.modelCatalog.find((m) => m.id === this.plugin.model(this.kind));
+      if (model && !model.supportsImages) throw new Error("该模型不支持图片，无法执行逐页视觉检查，请选择支持图片的模型");
       this.translationOpen = true;
       this.panels();
       this.translateButton!.disabled = true;
@@ -699,6 +776,9 @@ export class PaperLensView extends FileView {
           kind: this.kind,
           cliPath: this.plugin.cliPath(this.kind),
           model: this.plugin.model(this.kind),
+          effort: this.plugin.settings[this.kind === "codex" ? "codexEffort" : "claudeEffort"] || undefined,
+          fullAccess: this.plugin.settings.translationFullAccess,
+          concurrency: this.plugin.settings.translationConcurrency,
         },
         {
           sourceBytes: async () =>

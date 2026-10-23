@@ -6,6 +6,37 @@ import { runCodex } from "../src/agents/codex";
 import type { AgentEvent } from "../src/core/types";
 
 describe("Codex process lifecycle", () => {
+  it("passes selected model, effort and full access and auto-answers approvals", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "paper-lens-policy-"));
+    try {
+      const cli = join(dir, "codex");
+      await writeFile(cli, `#!/usr/bin/env node
+const rl=require('readline').createInterface({input:process.stdin});
+const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
+rl.on('line',line=>{const m=JSON.parse(line);
+if(m.method==='initialize')send({id:m.id,result:{}});
+if(m.method==='thread/start'){
+ if(m.params.model!=='configured-model'||m.params.approvalPolicy!=='never'||m.params.sandbox!=='danger-full-access')throw Error('wrong configuration');
+ send({id:m.id,result:{thread:{id:'session'}}});
+}
+if(m.method==='turn/start'){
+ if(m.params.effort!=='low'||m.params.input[1].type!=='localImage'||!m.params.outputSchema)throw Error('missing turn configuration');
+ send({id:m.id,result:{turn:{id:'turn'}}});
+ send({id:'permission',method:'item/commandExecution/requestApproval',params:{threadId:'session'}});
+}
+if(m.id==='permission'){
+ if(m.result.decision!=='accept')throw Error('not approved');
+ send({method:'turn/completed',params:{threadId:'session',turn:{status:'completed'}}});
+}
+});`, { mode: 0o755 });
+      const events: AgentEvent[] = [];
+      await runCodex(cli, { cwd: dir, prompt: "x", model: "configured-model",
+        effort: "low", fullAccess: true, images: ["preview.png"], outputSchema: { type: "object" } },
+        (event) => events.push(event)).done;
+      expect(events.some((e) => e.type === "permission")).toBe(false);
+      expect(events.at(-1)?.type).toBe("done");
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
   it("streams, resumes its own thread and resolves completion once", async () => {
     const dir = await mkdtemp(join(tmpdir(), "paper-lens-agent-"));
     try {

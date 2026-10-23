@@ -14,6 +14,7 @@ export interface PageSize {
   height: number;
 }
 export type AgentEvent =
+  | { type: "result"; value: unknown }
   | { type: "delta"; text: string }
   | { type: "status"; text: string }
   | { type: "session"; id: string }
@@ -31,6 +32,16 @@ export interface AgentTask {
   sessionId?: string;
   skillPath?: string;
   model?: string;
+  effort?: string;
+  fullAccess?: boolean;
+  images?: string[];
+  outputSchema?: Record<string, unknown>;
+}
+export interface AgentModel {
+  id: string;
+  name: string;
+  efforts: string[];
+  supportsImages: boolean;
 }
 export interface AgentRun {
   done: Promise<void>;
