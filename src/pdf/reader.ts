@@ -9,6 +9,9 @@ import { textStyle } from "../core/annotations";
 import {
   locatePosition,
   positionOffset,
+  clampZoom,
+  wheelZoom,
+  resizeBox,
   type Position,
 } from "../core/geometry";
 import { openPdf, pdfRuntime } from "./runtime";
@@ -41,6 +44,12 @@ export class PdfReader {
   onAnnotation?: (id: string, edit: boolean) => void;
   onInsert?: (page: number, point: [number, number]) => void;
   onMove?: (id: string, delta: [number, number]) => void;
+  onResize?: (id: string, rect: Rect) => void;
+  onZoom?: (zoom: number) => void;
+  private finishPointer?: () => void;
+  private zoomFrame = 0;
+  private gestureZoom?: number;
+  private zoomAnchor?: { slot: Slot; x: number; y: number; clientX: number; clientY: number };
   private suppressScroll = false;
   private frame = 0;
   constructor(
@@ -67,6 +76,7 @@ export class PdfReader {
     this.resize.observe(el);
     el.addEventListener("scroll", this.scrolled);
     el.addEventListener("pointerdown", this.pointerDown);
+    el.addEventListener("wheel", this.wheel, { passive: false });
   }
   sizes: PageSize[] = [];
   async load(bytes: Uint8Array): Promise<string[]> {
@@ -167,9 +177,44 @@ export class PdfReader {
       if (this.isNear(slot)) void this.render(slot);
   }
   setZoom(zoom: number): void {
-    this.zoom = zoom;
+    if (clampZoom(zoom) === this.zoom) return;
+    this.finishPointer?.();
+    this.zoom = clampZoom(zoom);
     this.layout();
   }
+  fitZoom(): number {
+    return clampZoom((this.el.clientWidth - 32) / Math.max(1, ...this.sizes.map((s) => s.width)));
+  }
+  private wheel = (event: WheelEvent): void => {
+    if (!event.ctrlKey || this.disposed) return;
+    event.preventDefault();
+    const bounds = this.el.getBoundingClientRect();
+    const slot = this.slots.find((s) => {
+      const page = s.el.getBoundingClientRect();
+      return event.clientY >= page.top && event.clientY <= page.bottom && s.el.style.display !== "none";
+    });
+    if (slot && !this.zoomAnchor) {
+      const page = slot.el.getBoundingClientRect();
+      this.zoomAnchor = { slot, x: (event.clientX - page.left) / this.scale,
+        y: (event.clientY - page.top) / this.scale,
+        clientX: event.clientX - bounds.left, clientY: event.clientY - bounds.top };
+    }
+    this.gestureZoom = wheelZoom(this.gestureZoom ?? this.zoom, event.deltaY, event.deltaMode);
+    cancelAnimationFrame(this.zoomFrame);
+    this.zoomFrame = requestAnimationFrame(() => {
+      const zoom = this.gestureZoom!;
+      this.gestureZoom = undefined;
+      this.onZoom?.(zoom);
+      const anchor = this.zoomAnchor;
+      this.zoomAnchor = undefined;
+      if (anchor) {
+        this.el.scrollLeft = anchor.slot.el.offsetLeft + anchor.x * this.scale - anchor.clientX;
+        this.el.scrollTop = anchor.slot.el.offsetTop + anchor.y * this.scale - anchor.clientY;
+        this.lastPosition = this.position();
+        this.onPosition?.(this.lastPosition);
+      }
+    });
+  };
   setMode(mode: "continuous" | "single"): void {
     const pos = this.position();
     this.mode = mode;
@@ -289,9 +334,7 @@ export class PdfReader {
   private layout(): void {
     if (this.disposed || !this.sizes.length || this.el.clientWidth < 40) return;
     const pos = this.lastPosition;
-    const maxWidth = Math.max(...this.sizes.map((x) => x.width));
-    const scale =
-      Math.min(1.5, (this.el.clientWidth - 32) / maxWidth) * this.zoom;
+    const scale = this.zoom;
     const changed = Math.abs(scale - this.scale) > 0.001;
     this.scale = scale;
     this.slots.forEach((slot, i) => {
@@ -399,6 +442,13 @@ export class PdfReader {
           el.style.fontSize = `${style.fontSize * this.scale}px`;
           el.style.setProperty("--pl-color", `rgb(${style.color.map((c) => c * 255).join(" ")})`);
           content.style.padding = `${2 * this.scale}px ${4 * this.scale}px`;
+          if (this.selected === item.id) {
+            const handle = document.createElement("span");
+            handle.className = "pl-resize-handle";
+            handle.title = "拖动调整文字框大小";
+            handle.setAttribute("aria-hidden", "true");
+            el.append(handle);
+          }
         } else {
           el.style.setProperty("--pl-highlight", `rgb(${item.color.map((c) => c * 255).join(" ")} / 0.32)`);
         }
@@ -427,19 +477,61 @@ export class PdfReader {
       slot?.viewport &&
       !this.readonly
     ) {
-      const start = slot.viewport.convertToPdfPoint(e.clientX, e.clientY);
-      const end = (event: PointerEvent) => {
-        window.removeEventListener("pointerup", end);
-        const stop = slot.viewport!.convertToPdfPoint(
-          event.clientX,
-          event.clientY,
-        );
-        if (
-          Math.hypot(event.clientX - e.clientX, event.clientY - e.clientY) > 4
-        )
-          this.onMove?.(item, [stop[0]! - start[0]!, stop[1]! - start[1]!]);
+      e.preventDefault();
+      const annotation = this.annotations.find((a) => a.id === item)!;
+      const viewport = slot.viewport;
+      const resize = !!target.closest(".pl-resize-handle");
+      const original = annotation.rects.map((rect) => viewport.convertToViewportRectangle(rect) as Rect);
+      let delta: [number, number] = [0, 0], resized: Rect | undefined;
+      const move = (event: PointerEvent) => {
+        if (event.pointerId !== e.pointerId) return;
+        const dx = event.clientX - e.clientX, dy = event.clientY - e.clientY;
+        if (Math.hypot(dx, dy) <= 4 && !resized && delta[0] === 0 && delta[1] === 0) return;
+        if (resize) {
+          const r = original[0]!;
+          const box = resizeBox([Math.min(r[0], r[2]), Math.min(r[1], r[3]),
+            Math.max(r[0], r[2]), Math.max(r[1], r[3])], [dx, dy],
+            [viewport.width, viewport.height], [24 * this.scale, 18 * this.scale]);
+          const a = viewport.convertToPdfPoint(box[0], box[1]),
+            b = viewport.convertToPdfPoint(box[2], box[3]);
+          resized = [Math.min(a[0]!, b[0]!), Math.min(a[1]!, b[1]!),
+            Math.max(a[0]!, b[0]!), Math.max(a[1]!, b[1]!)];
+          this.placeRect(target.closest<HTMLElement>("[data-annotation]")!, box);
+        } else {
+          const a = viewport.convertToPdfPoint(0, 0), b = viewport.convertToPdfPoint(dx, dy);
+          delta = [b[0]! - a[0]!, b[1]! - a[1]!];
+          const elements = slot.surface.querySelectorAll<HTMLElement>("[data-annotation]");
+          let index = 0;
+          for (const el of elements) if (el.dataset.annotation === item) {
+            const r = original[index++]!;
+            this.placeRect(el, [r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy]);
+          }
+        }
       };
-      window.addEventListener("pointerup", end, { once: true });
+      const end = (event: PointerEvent) => {
+        if (event.pointerId !== e.pointerId) return;
+        move(event);
+        cleanup();
+        if (Math.hypot(event.clientX - e.clientX, event.clientY - e.clientY) > 4) {
+          if (resized) this.onResize?.(item, resized);
+          else this.onMove?.(item, delta);
+          this.drawAnnotations(slot);
+        } else if (resized || delta[0] !== 0 || delta[1] !== 0) {
+          this.drawAnnotations(slot);
+        }
+      };
+      const cancel = () => { cleanup(); this.drawAnnotations(slot); };
+      const cleanup = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", end);
+        window.removeEventListener("pointercancel", cancel);
+        this.finishPointer = undefined;
+      };
+      this.finishPointer?.();
+      this.finishPointer = cancel;
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", end);
+      window.addEventListener("pointercancel", cancel, { once: true });
       return;
     }
     if (this.tool === "text" && slot?.viewport && !this.readonly) {
@@ -462,9 +554,14 @@ export class PdfReader {
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      this.finishPointer = undefined;
     };
+    this.finishPointer?.();
+    this.finishPointer = up;
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up, { once: true });
+    window.addEventListener("pointercancel", up, { once: true });
   };
   private release(slot: Slot): void {
     slot.version++;
@@ -488,11 +585,14 @@ export class PdfReader {
   }
   dispose(): void {
     this.disposed = true;
+    this.finishPointer?.();
+    cancelAnimationFrame(this.zoomFrame);
     cancelAnimationFrame(this.frame);
     this.observer.disconnect();
     this.resize.disconnect();
     this.el.removeEventListener("scroll", this.scrolled);
     this.el.removeEventListener("pointerdown", this.pointerDown);
+    this.el.removeEventListener("wheel", this.wheel);
     for (const slot of this.slots) this.release(slot);
     for (const doc of this.docs) void doc.destroy();
     this.docs.clear();

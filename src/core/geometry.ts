@@ -6,6 +6,22 @@ export interface PageLayout {
   top: number;
   height: number;
 }
+export function clampZoom(zoom: number): number {
+  return Number.isFinite(zoom) ? Math.max(0.25, Math.min(4, zoom)) : 1;
+}
+export function wheelZoom(current: number, delta: number, mode: number): number {
+  const pixels = delta * (mode === 1 ? 16 : mode === 2 ? 800 : 1);
+  return clampZoom(current * Math.exp(-Math.max(-100, Math.min(100, pixels)) * 0.01));
+}
+export function resizeBox(
+  box: [number, number, number, number], delta: [number, number],
+  bounds: [number, number], minimum: [number, number],
+): [number, number, number, number] {
+  const [left, top, right, bottom] = box;
+  return [left, top,
+    Math.max(left + minimum[0], Math.min(bounds[0], right + delta[0])),
+    Math.max(top + minimum[1], Math.min(bounds[1], bottom + delta[1]))];
+}
 export function locatePosition(
   offset: number,
   layouts: PageLayout[],

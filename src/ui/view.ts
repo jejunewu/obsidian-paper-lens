@@ -12,6 +12,7 @@ import { PDFDocument } from "pdf-lib";
 import type PaperLensPlugin from "../main";
 import type { AgentKind, Annotation } from "../core/types";
 import { AnnotationStore, textStyle } from "../core/annotations";
+import { clampZoom } from "../core/geometry";
 import { digest } from "../translation/protocol";
 import { PdfReader } from "../pdf/reader";
 import {
@@ -48,6 +49,7 @@ export class PaperLensView extends FileView {
   private selected?: string;
   private kind: AgentKind;
   private zoom = 1;
+  private zoomInput?: HTMLInputElement;
   private highlightColor = "#ffd933";
   private textColor = "#1a1a1a";
   private fontSize = 12;
@@ -114,7 +116,7 @@ export class PaperLensView extends FileView {
     if (state.agent === "codex" || state.agent === "claude")
       this.kind = state.agent;
     if (typeof state.zoom === "number")
-      this.zoom = Math.max(0.25, Math.min(4, state.zoom));
+      this.zoom = clampZoom(state.zoom);
     this.translationOpen = state.translationOpen === true;
     const pos = state.position as
       | { page?: number; fraction?: number }
@@ -187,7 +189,22 @@ export class PaperLensView extends FileView {
     const pan = this.button(toolbar, "拖动", () => setTool("pan", pan));
     toolButtons.push(pan);
     this.button(toolbar, "−", () => this.setZoom(this.zoom / 1.2));
+    this.zoomInput = toolbar.createEl("input", {
+      type: "text", value: `${Math.round(this.zoom * 100)}%`, cls: "pl-zoom-input",
+      attr: { "aria-label": "缩放百分比", title: "缩放百分比（25%–400%）", inputmode: "decimal" },
+    });
+    const applyZoom = () => {
+      const value = this.zoomInput!.value.trim().replace(/%$/, "");
+      if (value && Number.isFinite(Number(value))) this.setZoom(Number(value) / 100);
+      else this.zoomInput!.value = `${Math.round(this.zoom * 100)}%`;
+    };
+    this.zoomInput.addEventListener("change", applyZoom);
+    this.zoomInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { applyZoom(); this.zoomInput!.blur(); }
+      if (e.key === "Escape") { this.zoomInput!.value = `${Math.round(this.zoom * 100)}%`; this.zoomInput!.blur(); }
+    });
     this.button(toolbar, "+", () => this.setZoom(this.zoom * 1.2));
+    this.button(toolbar, "适合宽度", () => this.setZoom(this.source?.fitZoom() ?? 1));
     const mode = toolbar.createEl("select", {
       attr: { "aria-label": "翻页方式" },
     });
@@ -326,9 +343,10 @@ export class PaperLensView extends FileView {
       if (this.pageInput) this.pageInput.value = String(pos.page);
     };
     this.source.onAnnotation = (id, edit) => {
+      const changed = this.selected !== id;
       this.selected = id;
       this.syncStyleControls();
-      this.source?.setAnnotations(this.store.items, id);
+      if (changed) this.source?.setAnnotations(this.store.items, id);
       if (edit && !this.saveBusy)
         void this.editText(id).catch((e) => this.error(e));
     };
@@ -351,6 +369,13 @@ export class PaperLensView extends FileView {
       });
       this.annotationsChanged();
     };
+    this.source.onResize = (id, rect) => {
+      const item = this.store.items.find((x) => x.id === id && x.kind === "text");
+      if (!item || this.saveBusy) return;
+      this.store.upsert({ ...item, rects: [rect] });
+      this.annotationsChanged();
+    };
+    this.source.onZoom = this.translation.onZoom = (zoom) => this.setZoom(zoom);
     this.registerDomEvent(panels, "dragover", (e) => {
       e.preventDefault();
     });
@@ -616,7 +641,8 @@ export class PaperLensView extends FileView {
     }
   }
   private setZoom(zoom: number): void {
-    this.zoom = Math.max(0.25, Math.min(4, zoom));
+    this.zoom = clampZoom(zoom);
+    if (this.zoomInput) this.zoomInput.value = `${Math.round(this.zoom * 100)}%`;
     this.source?.setZoom(this.zoom);
     this.translation?.setZoom(this.zoom);
   }

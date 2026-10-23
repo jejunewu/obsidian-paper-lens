@@ -239,6 +239,21 @@
 .pl-annotation.is-selected {
   outline: 2px solid #247bcc;
 }
+.pl-resize-handle {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  border: 1px solid white;
+  background: #247bcc;
+  cursor: nwse-resize;
+  z-index: 4;
+}
+.pl-toolbar .pl-zoom-input {
+  width: 68px;
+  height: 28px;
+}
 .pl-reader[data-tool="pan"] .pl-annotation,
 .pl-reader[data-tool="text"] .pl-annotation {
   pointer-events: none;
