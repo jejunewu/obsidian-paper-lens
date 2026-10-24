@@ -1,0 +1,6 @@
+# Tested compatible runtime. bitstring 5 removes BitStream required by BabelDOC.
+pdf2zh-next==2.9.0
+babeldoc==0.6.2
+PyMuPDF==1.25.2
+bitstring==4.3.1
+onnxruntime==1.31.0

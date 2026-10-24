@@ -1,4 +1,3 @@
-export type AgentKind = "codex" | "claude";
 export type Rect = [number, number, number, number];
 export interface Annotation {
   id: string;
@@ -13,37 +12,12 @@ export interface PageSize {
   width: number;
   height: number;
 }
-export type AgentEvent =
-  | { type: "result"; value: unknown }
-  | { type: "delta"; text: string }
+export type TranslationEvent =
   | { type: "status"; text: string }
-  | { type: "session"; id: string }
-  | {
-      type: "permission";
-      title: string;
-      detail: string;
-      respond: (allow: boolean) => void;
-    }
+  | { type: "progress"; stage: string; percent: number; current: number; total: number }
   | { type: "done" | "cancelled" }
   | { type: "error"; text: string };
-export interface AgentTask {
-  cwd: string;
-  prompt: string;
-  sessionId?: string;
-  skillPath?: string;
-  model?: string;
-  effort?: string;
-  fullAccess?: boolean;
-  images?: string[];
-  outputSchema?: Record<string, unknown>;
-}
-export interface AgentModel {
-  id: string;
-  name: string;
-  efforts: string[];
-  supportsImages: boolean;
-}
-export interface AgentRun {
+export interface TranslationRun {
   done: Promise<void>;
   cancel: () => void;
 }
@@ -80,5 +54,4 @@ export interface TranslationJob {
   targetLanguage: "zh-CN";
   outputDir: string;
   toolDir: string;
-  fontPath: string;
 }

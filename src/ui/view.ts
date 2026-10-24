@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { PDFDocument } from "pdf-lib";
 import type PaperLensPlugin from "../main";
-import type { AgentKind, AgentModel, Annotation } from "../core/types";
+import type { Annotation } from "../core/types";
 import { AnnotationStore, textStyle } from "../core/annotations";
 import { clampZoom, type Position } from "../core/geometry";
 import { digest } from "../translation/protocol";
@@ -22,14 +22,11 @@ import {
 } from "../pdf/annotations";
 import { saveSource } from "../pdf/source";
 import { TranslationManager } from "../translation/manager";
+import { listModels, validateApi } from "../translation/api";
 import { textDialog, unsavedDialog } from "./modals";
 import { TranslationStatus } from "./translation-status";
 export const VIEW_TYPE = "paper-lens";
-const COLORS = [
-  ["黄", "#ffd933"], ["绿", "#66cc80"], ["蓝", "#3388dd"],
-  ["粉", "#ee77bb"], ["橙", "#ff9933"], ["红", "#cc3333"],
-  ["紫", "#9955cc"], ["黑", "#1a1a1a"],
-] as const;
+type PaperTool = "select" | "pan" | "text" | "highlight";
 function rgbColor(hex: string): Annotation["color"] {
   return [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255) as Annotation["color"];
 }
@@ -47,21 +44,20 @@ export class PaperLensView extends FileView {
   private bytes?: Uint8Array;
   private pageTexts: string[] = [];
   private selected?: string;
-  private kind: AgentKind;
+  private tool: PaperTool = "select";
+  private toolButtons = new Map<PaperTool, HTMLButtonElement>();
   private modelInput?: HTMLSelectElement;
   private customModelInput?: HTMLInputElement;
   private effortInput?: HTMLSelectElement;
-  private agentInput?: HTMLSelectElement;
-  private modelCatalog: AgentModel[] = [];
+  private modelCatalog: string[] = [];
   private catalogVersion = 0;
-  private catalogReady = false;
   private zoom = 1;
   private zoomInput?: HTMLInputElement;
   private highlightColor = "#ffd933";
   private textColor = "#1a1a1a";
   private fontSize = 12;
-  private highlightInput?: HTMLSelectElement;
-  private textColorInput?: HTMLSelectElement;
+  private highlightInput?: HTMLInputElement;
+  private textColorInput?: HTMLInputElement;
   private fontSizeInput?: HTMLInputElement;
   private translationPanel?: HTMLElement;
   private translateDivider?: HTMLElement;
@@ -84,16 +80,13 @@ export class PaperLensView extends FileView {
   private persistence = Promise.resolve();
   private restorePosition?: { page: number; fraction: number };
   private restoreTranslationPosition?: Position;
-  private translationPermissions?: HTMLElement;
-  private permissionReplies = new Set<(allow: boolean) => void>();
   constructor(
     leaf: WorkspaceLeaf,
     private plugin: PaperLensPlugin,
   ) {
     super(leaf);
     this.allowNoFile = true;
-    this.kind = plugin.settings.defaultAgent;
-    this.manager = new TranslationManager(plugin.agents);
+    this.manager = new TranslationManager();
   }
   getViewType(): string {
     return VIEW_TYPE;
@@ -115,7 +108,6 @@ export class PaperLensView extends FileView {
       scrollLinked: this.scrollLinked,
       activePane: this.activePane,
       translationOpen: this.translationOpen,
-      agent: this.kind,
       zoom: this.zoom,
     };
   }
@@ -127,8 +119,6 @@ export class PaperLensView extends FileView {
     const path =
       typeof state.file === "string" ? state.file :
         typeof state.path === "string" ? state.path : "";
-    if (state.agent === "codex" || state.agent === "claude")
-      this.kind = state.agent;
     if (typeof state.zoom === "number")
       this.zoom = clampZoom(state.zoom);
     this.translationOpen = state.translationOpen === true;
@@ -160,7 +150,6 @@ export class PaperLensView extends FileView {
   }
   async onUnloadFile(): Promise<void> {
     this.ready = false;
-    this.clearTranslationPermissions();
     this.manager.dispose();
   }
   async onOpen(): Promise<void> {
@@ -193,23 +182,9 @@ export class PaperLensView extends FileView {
       attr: { role: "toolbar", "aria-label": "Paper Lens 工具栏" },
     });
     this.saveButton = this.button(toolbar, "保存", () => this.save());
-    const toolButtons: HTMLButtonElement[] = [];
-    const setTool = (
-      tool: "select" | "pan" | "text",
-      button: HTMLButtonElement,
-    ) => {
-      this.source?.setTool(tool);
-      this.translation?.setTool(tool === "pan" ? "pan" : "select");
-      for (const item of toolButtons)
-        item.setAttribute("aria-pressed", String(item === button));
-    };
-    const select = this.button(toolbar, "选择", () =>
-      setTool("select", select),
-    );
-    toolButtons.push(select);
-    select.setAttribute("aria-pressed", "true");
-    const pan = this.button(toolbar, "拖动", () => setTool("pan", pan));
-    toolButtons.push(pan);
+    this.toolButtons.clear();
+    this.toolButtons.set("select", this.button(toolbar, "选择", () => this.setTool("select")));
+    this.toolButtons.set("pan", this.button(toolbar, "拖动", () => this.setTool("pan")));
     this.button(toolbar, "−", () => this.setZoom(this.zoom / 1.2));
     this.zoomInput = toolbar.createEl("input", {
       type: "text", value: `${Math.round(this.zoom * 100)}%`, cls: "pl-zoom-input",
@@ -254,13 +229,14 @@ export class PaperLensView extends FileView {
     this.pageInput.addEventListener("change", () =>
       this.navigate(Number(this.pageInput!.value)),
     );
-    this.button(toolbar, "荧光笔", () => this.highlight());
+    const highlighter = this.button(toolbar, "荧光笔", () => this.toggleHighlight());
+    highlighter.title = "选中文字后自动高亮；再次点击或按 Esc 退出";
+    this.toolButtons.set("highlight", highlighter);
     this.highlightInput = this.colorControl(toolbar, "高亮颜色", this.highlightColor, (color) => {
       this.highlightColor = color;
       this.updateStyle("highlight", { color: rgbColor(color) });
     });
-    const text = this.button(toolbar, "插入文本", () => setTool("text", text));
-    toolButtons.push(text);
+    this.toolButtons.set("text", this.button(toolbar, "插入文本", () => this.setTool("text")));
     this.textColorInput = this.colorControl(toolbar, "文字颜色", this.textColor, (color) => {
       this.textColor = color;
       this.updateStyle("text", { color: rgbColor(color), fontSize: this.fontSize });
@@ -293,17 +269,6 @@ export class PaperLensView extends FileView {
     this.translateButton = this.button(toolbar, "全文翻译", () =>
       this.translate(),
     );
-    const agent = toolbar.createEl("select", {
-      attr: { "aria-label": "Agent 选择" },
-    });
-    agent.createEl("option", { text: "Codex", value: "codex" });
-    agent.createEl("option", { text: "Claude Code", value: "claude" });
-    agent.value = this.kind;
-    this.agentInput = agent;
-    agent.addEventListener("change", () => {
-      this.kind = agent.value as AgentKind;
-      void this.loadModels();
-    });
     this.modelInput = toolbar.createEl("select", { attr: { "aria-label": "翻译模型" } });
     this.modelInput.addEventListener("change", () => {
       if (this.customModelInput) this.customModelInput.hidden = this.modelInput!.value !== "custom";
@@ -315,7 +280,7 @@ export class PaperLensView extends FileView {
     this.customModelInput.addEventListener("change", () => { this.rememberModel(); this.fillEfforts(); });
     this.effortInput = toolbar.createEl("select", { attr: { "aria-label": "翻译推理强度" } });
     this.effortInput.addEventListener("change", () => {
-      this.plugin.settings[this.kind === "codex" ? "codexEffort" : "claudeEffort"] = this.effortInput!.value;
+      this.plugin.settings.reasoningEffort = this.effortInput!.value;
       void this.plugin.saveSettings().catch((e) => this.error(e));
     });
     this.button(toolbar, "刷新模型", () => this.loadModels(true));
@@ -347,9 +312,6 @@ export class PaperLensView extends FileView {
     });
     this.translationDetails.createEl("summary", { text: "翻译任务详情" });
     this.translationLog = this.translationDetails.createEl("pre");
-    this.translationPermissions = this.contentEl.createDiv({
-      cls: "pl-translation-permissions",
-    });
     const panels = this.contentEl.createDiv({ cls: "pl-panels" });
     const originalPanel = panels.createDiv({ cls: "pl-panel pl-source-panel" });
     const originalHeader = originalPanel.createDiv({ cls: "pl-panel-header" });
@@ -395,9 +357,16 @@ export class PaperLensView extends FileView {
       if (edit && !this.saveBusy)
         void this.editText(id).catch((e) => this.error(e));
     };
+    this.source.onSelection = () => {
+      try { this.selectionFinished(); }
+      catch (error) { this.error(error); }
+    };
+    this.registerDomEvent(sourceEl, "keydown", (event) => {
+      if (event.key === "Escape" && this.tool === "highlight") this.setTool("select");
+    });
     this.source.onInsert = (page, point) => {
       void this.insertText(page, point).then((created) => {
-        if (created) setTool("select", select);
+        if (created) this.setTool("select");
       }).catch((e) => this.error(e));
     };
     this.source.onMove = (id, delta) => {
@@ -445,7 +414,29 @@ export class PaperLensView extends FileView {
         }
       }
     });
+    this.setTool(this.tool);
     this.panels();
+  }
+  private setTool(tool: PaperTool): void {
+    this.tool = tool;
+    this.source?.setTool(tool === "highlight" ? "select" : tool);
+    this.translation?.setTool(tool === "pan" ? "pan" : "select");
+    if (this.source) this.source.el.dataset.highlight = String(tool === "highlight");
+    if (tool === "highlight") {
+      this.selected = undefined;
+      this.source?.setAnnotations(this.store.items);
+    }
+    for (const [name, button] of this.toolButtons)
+      button.setAttribute("aria-pressed", String(name === tool));
+  }
+  private toggleHighlight(): void {
+    if (this.saveBusy) throw new Error("批注正在保存，请稍候");
+    if (this.tool === "highlight") { this.setTool("select"); return; }
+    this.setTool("highlight");
+    this.highlight();
+  }
+  private selectionFinished(): void {
+    if (this.tool === "highlight" && !this.saveBusy) this.highlight();
   }
   private divider(
     parent: HTMLElement,
@@ -531,65 +522,49 @@ export class PaperLensView extends FileView {
     this.app.workspace.requestSaveLayout();
   }
   private rememberModel(): void {
-    const model = this.modelInput!.value === "custom"
+    this.plugin.settings.apiModel = this.modelInput!.value === "custom"
       ? this.customModelInput!.value.trim() : this.modelInput!.value;
-    this.plugin.settings[this.kind === "codex" ? "codexModel" : "claudeModel"] = model;
     void this.plugin.saveSettings().catch((e) => this.error(e));
   }
-  private fillEfforts(): void {
+  private fillEfforts(disabled = this.manager.active): void {
     if (!this.effortInput) return;
     this.effortInput.replaceChildren();
-    this.effortInput.createEl("option", { text: "推理：沿用本地配置", value: "" });
-    const model = this.plugin.model(this.kind);
-    const options = this.modelCatalog.find((m) => m.id === model)?.efforts ?? [];
-    for (const effort of options) this.effortInput.createEl("option", { text: `推理：${effort}`, value: effort });
-    const key = this.kind === "codex" ? "codexEffort" : "claudeEffort";
-    if (this.catalogReady && !options.includes(this.plugin.settings[key])) this.plugin.settings[key] = "";
-    this.effortInput.value = this.plugin.settings[key];
-    this.effortInput.disabled = !options.length;
+    for (const [value, text] of Object.entries({ "": "推理：不发送", minimal: "minimal", low: "low", medium: "medium", high: "high" }))
+      this.effortInput.createEl("option", { text, value });
+    this.effortInput.value = this.plugin.settings.reasoningEffort;
+    this.effortInput.disabled = disabled;
   }
   private async loadModels(refresh = false): Promise<void> {
     if (!this.modelInput || !this.customModelInput) return;
-    const version = ++this.catalogVersion, kind = this.kind;
+    const version = ++this.catalogVersion;
     const fill = () => {
-      const model = this.plugin.model(kind) ?? "";
+      const model = this.plugin.settings.apiModel;
       this.modelInput!.replaceChildren();
-      this.modelInput!.createEl("option", { text: "模型：沿用本地配置", value: "" });
-      for (const item of this.modelCatalog) this.modelInput!.createEl("option", { text: item.name, value: item.id });
+      for (const id of this.modelCatalog) this.modelInput!.createEl("option", { text: id, value: id });
       this.modelInput!.createEl("option", { text: "自定义模型…", value: "custom" });
-      const custom = !!model && !this.modelCatalog.some((m) => m.id === model);
+      const custom = !this.modelCatalog.includes(model);
       this.modelInput!.value = custom ? "custom" : model;
       this.customModelInput!.value = custom ? model : "";
       this.customModelInput!.hidden = !custom;
       this.fillEfforts();
     };
-    this.modelCatalog = [];
-    this.catalogReady = false;
     fill();
-    this.modelInput.title = "正在读取本地 Agent 模型列表…";
+    if (!refresh) return;
     try {
-      const models = await this.plugin.agents.models(kind, this.plugin.cliPath(kind),
-        this.plugin.sdkPath, this.plugin.workRoot, refresh);
+      this.modelCatalog = await listModels(this.plugin.apiConfig);
       if (this.closed || version !== this.catalogVersion) return;
-      this.modelCatalog = models;
-      this.catalogReady = true;
       fill();
-      if (this.manager.active) {
-        this.modelInput.disabled = true;
-        this.effortInput!.disabled = true;
-      }
-      this.modelInput.title = "翻译模型（模型是否可用由当前 provider 验证）";
-    } catch (e) {
+      this.modelInput.title = "当前 API 服务的模型目录";
+    } catch (error) {
       if (this.closed || version !== this.catalogVersion) return;
-      this.modelInput.title = `模型列表读取失败，可沿用本地配置或填写自定义模型：${String(e)}`;
+      this.modelInput.title = "模型目录不可用，可直接填写模型 ID";
+      this.error(error);
     }
   }
   private colorControl(parent: HTMLElement, label: string, value: string,
-    change: (value: string) => void): HTMLSelectElement {
-    const input = parent.createEl("select", { attr: { "aria-label": label, title: label } });
-    for (const [name, color] of COLORS)
-      input.createEl("option", { text: `${label}：${name}`, value: color });
-    input.value = value;
+    change: (value: string) => void): HTMLInputElement {
+    const input = parent.createEl("input", { type: "color", value, cls: "pl-color-input",
+      attr: { "aria-label": label, title: label } });
     input.addEventListener("change", () => change(input.value));
     return input;
   }
@@ -602,20 +577,14 @@ export class PaperLensView extends FileView {
   private syncStyleControls(): void {
     const item = this.store.items.find((x) => x.id === this.selected);
     if (!item) return;
-    const setColor = (input: HTMLSelectElement | undefined, color: string) => {
-      if (!input) return;
-      if (![...input.options].some((option) => option.value === color))
-        input.createEl("option", { text: "当前颜色", value: color });
-      input.value = color;
-    };
     if (item.kind === "highlight") {
       this.highlightColor = hexColor(item.color);
-      setColor(this.highlightInput, this.highlightColor);
+      if (this.highlightInput) this.highlightInput.value = this.highlightColor;
     } else {
       const style = textStyle(item);
       this.textColor = hexColor(style.color);
       this.fontSize = style.fontSize;
-      setColor(this.textColorInput, this.textColor);
+      if (this.textColorInput) this.textColorInput.value = this.textColor;
       if (this.fontSizeInput) this.fontSizeInput.value = String(this.fontSize);
     }
   }
@@ -623,7 +592,7 @@ export class PaperLensView extends FileView {
     this.ready = false;
     this.status!.textContent = "正在加载论文…";
     this.manager.dispose();
-    this.manager = new TranslationManager(this.plugin.agents);
+    this.manager = new TranslationManager();
     try {
       const file = this.app.vault.getAbstractFileByPath(this.path);
       if (!(file instanceof TFile) || file.extension.toLowerCase() !== "pdf")
@@ -707,7 +676,7 @@ export class PaperLensView extends FileView {
   private highlight(): void {
     if (this.saveBusy) throw new Error("批注正在保存，请稍候");
     const selection = this.source?.selection();
-    if (!selection) throw new Error("请先在原文同一页选中文字");
+    if (!selection?.text.trim()) return;
     this.store.upsert({
       id: randomUUID(),
       page: selection.page,
@@ -717,6 +686,7 @@ export class PaperLensView extends FileView {
       color: rgbColor(this.highlightColor),
     });
     this.annotationsChanged();
+    this.source?.clearSelection();
   }
   private async insertText(
     page: number,
@@ -800,18 +770,17 @@ export class PaperLensView extends FileView {
     if (!this.ready || !this.bytes)
       throw new Error("请先打开可选中文字的论文 PDF");
     if (this.manager.active) throw new Error("当前论文已有翻译任务");
-    if (this.pageTexts.some((text) => !text.trim())) {
+    if (this.pageTexts.every((text) => !text.trim())) {
       if (restoreOnly) return;
       throw new Error("扫描页不支持翻译，请使用可选中文字的英文 PDF");
     }
     if (!restoreOnly) {
-      const model = this.modelCatalog.find((m) => m.id === this.plugin.model(this.kind));
-      if (model && !model.supportsImages) throw new Error("该模型不支持图片，无法执行逐页视觉检查，请选择支持图片的模型");
+      validateApi(this.plugin.apiConfig);
       this.translationOpen = true;
       this.panels();
       this.translateButton!.disabled = true;
       this.cancelButton!.hidden = false;
-      for (const input of [this.agentInput, this.modelInput, this.customModelInput, this.effortInput])
+      for (const input of [this.modelInput, this.customModelInput, this.effortInput])
         if (input) input.disabled = true;
     }
     this.translationStatus.reset();
@@ -820,7 +789,7 @@ export class PaperLensView extends FileView {
       type: "status",
       text: restoreOnly
         ? "正在恢复翻译检查点…"
-        : "正在准备论文快照并连接本地 Agent…",
+        : "正在准备论文快照和翻译引擎…",
     });
     this.progress!.textContent = this.translationStatus.text;
     try {
@@ -832,69 +801,39 @@ export class PaperLensView extends FileView {
           bytes: this.bytes,
           sizes: pdf.getPages().map((page) => page.getSize()),
           root: this.plugin.workRoot,
-          fontPath: join(
-            this.plugin.resourceRoot,
-            "fonts/NotoSansCJKsc-Regular.otf",
-          ),
-          skillPath: this.plugin.skillPath,
-          sdkPath: this.plugin.sdkPath,
-          kind: this.kind,
-          cliPath: this.plugin.cliPath(this.kind),
-          model: this.plugin.model(this.kind),
-          effort: this.plugin.settings[this.kind === "codex" ? "codexEffort" : "claudeEffort"] || undefined,
-          fullAccess: this.plugin.settings.translationFullAccess,
-          concurrency: this.plugin.settings.translationConcurrency,
+          runtimePath: this.plugin.runtimePath,
+          api: this.plugin.apiConfig,
         },
         {
           sourceBytes: async () =>
             readFile(join(this.plugin.basePath, this.path)),
           event: (event) => {
             if (this.closed) {
-              if (event.type === "permission") event.respond(false);
               return;
             }
             this.translationStatus.event(event);
             this.progress!.textContent = this.translationStatus.text;
             if (
-              event.type === "delta" ||
               event.type === "status" ||
               event.type === "error"
             ) {
               this.translationLog!.textContent = (
                 (this.translationLog!.textContent || "") +
-                (event.type === "delta" ? event.text : `\n${event.text}\n`)
+                `\n${event.text}\n`
               ).slice(-12000);
             }
             if (event.type === "error") this.translationDetails!.open = true;
-            if (event.type === "permission") {
-              this.permissionReplies.add(event.respond);
-              const box = this.translationPermissions!.createDiv({
-                cls: "pl-permission",
-              });
-              box.createEl("strong", { text: `翻译 · ${event.title}` });
-              box.createEl("pre", { text: event.detail });
-              for (const [label, allow] of [
-                ["允许本次操作", true],
-                ["拒绝", false],
-              ] as const)
-                this.button(box, label, () => {
-                  event.respond(allow);
-                  this.permissionReplies.delete(event.respond);
-                  box.remove();
-                });
-            }
             if (
               event.type === "done" ||
               event.type === "error" ||
               event.type === "cancelled"
             ) {
-              this.clearTranslationPermissions();
               this.translateButton!.disabled = false;
-              this.translateButton!.textContent = "翻译 / 重试失败页";
+              this.translateButton!.textContent = "翻译 / 重试";
               this.cancelButton!.hidden = true;
-              for (const input of [this.agentInput, this.modelInput, this.customModelInput])
+              for (const input of [this.modelInput, this.customModelInput])
                 if (input) input.disabled = false;
-              this.fillEfforts();
+              this.fillEfforts(false);
             }
           },
           progress: (manifest) => {
@@ -927,16 +866,16 @@ export class PaperLensView extends FileView {
       if (!this.manager.active) {
         this.translateButton!.disabled = false;
         this.cancelButton!.hidden = true;
-        for (const input of [this.agentInput, this.modelInput, this.customModelInput])
+        for (const input of [this.modelInput, this.customModelInput])
           if (input) input.disabled = false;
         this.fillEfforts();
       }
     } catch (e) {
-      for (const input of [this.agentInput, this.modelInput, this.customModelInput])
+      for (const input of [this.modelInput, this.customModelInput])
         if (input) input.disabled = false;
       this.fillEfforts();
       this.translateButton!.disabled = false;
-      this.translateButton!.textContent = "翻译 / 重试失败页";
+      this.translateButton!.textContent = "翻译 / 重试";
       this.cancelButton!.hidden = true;
       this.translationStatus.event({ type: "error", text: String(e) });
       this.progress!.textContent = this.translationStatus.text;
@@ -968,20 +907,16 @@ export class PaperLensView extends FileView {
     new Notice(`Paper Lens：${text}`, 10000);
   }
   fileRenamed(path: string, oldPath: string): void {
-    if (this.path === oldPath) {
-      this.path = path;
-      this.status!.textContent = "源文件已重命名；请重新打开以建立新的任务关联";
+    if (this.path === oldPath || this.path.startsWith(oldPath + "/")) {
+      this.path = path + this.path.slice(oldPath.length);
       this.manager.dispose();
+      this.manager = new TranslationManager();
+      if (this.ready && !this.closed)
+        void this.translate(true).catch((error) => this.error(error));
     }
-  }
-  private clearTranslationPermissions(): void {
-    for (const reply of this.permissionReplies) reply(false);
-    this.permissionReplies.clear();
-    this.translationPermissions?.replaceChildren();
   }
   shutdown(): void {
     this.closed = true;
-    this.clearTranslationPermissions();
     this.manager.dispose();
     this.source?.dispose();
     this.translation?.dispose();

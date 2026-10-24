@@ -1,14 +1,13 @@
-import { mkdir, readFile, writeFile, unlink, rename } from "node:fs/promises";
+import { mkdir, readFile, writeFile, unlink, rename, readdir } from "node:fs/promises";
 import { watch, type FSWatcher } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { PDFDocument } from "pdf-lib";
 import type {
   TranslationJob,
   JobManifest,
-  AgentKind,
-  AgentEvent,
-  AgentRun,
+  TranslationEvent,
+  TranslationRun,
   PageSize,
 } from "../core/types";
 import {
@@ -18,8 +17,9 @@ import {
   saveExclusive,
   validateManifest,
 } from "./protocol";
-import type { AgentService } from "../agents/service";
-import { TranslationPipeline } from "./pipeline";
+import { startTranslation } from "./backend";
+import type { ModelApiConfig } from "./config";
+import { apiBaseUrl, validateApi } from "./api";
 
 export interface TranslationOptions {
   documentId: string;
@@ -27,22 +27,43 @@ export interface TranslationOptions {
   bytes: Uint8Array;
   sizes: PageSize[];
   root: string;
-  fontPath: string;
-  skillPath: string;
-  sdkPath: string;
-  kind: AgentKind;
-  cliPath: string;
-  model?: string;
-  effort?: string;
-  fullAccess?: boolean;
-  concurrency?: number;
+  runtimePath: string;
+  api: ModelApiConfig;
 }
 export interface TranslationCallbacks {
-  event: (e: AgentEvent) => void;
+  event: (e: TranslationEvent) => void;
   page: (page: number, bytes: Uint8Array, warnings: string[]) => Promise<void>;
   progress: (manifest: JobManifest) => void;
   saved: (path: string, bytes: Uint8Array) => Promise<void>;
   sourceBytes: () => Promise<Uint8Array>;
+}
+function checkpointId(documentId: string, sourceHash: string, api: ModelApiConfig): string {
+  return digest(Buffer.from(JSON.stringify([documentId, sourceHash, "pdfmath-2.9.0-babeldoc-0.6.2-v1",
+    apiBaseUrl(api.baseUrl), api.model, api.effort, api.autoGlossary])));
+}
+async function movedCheckpoint(options: TranslationOptions, sourceHash: string): Promise<string | undefined> {
+  const documents = join(options.root, "documents");
+  const entries = await readdir(documents, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^[a-f0-9]{64}$/.test(entry.name)) continue;
+    const folder = join(documents, entry.name, "translation");
+    try {
+      const job = JSON.parse(await readFile(join(folder, "job.json"), "utf8")) as TranslationJob;
+      // The historical ID stays unchanged so its directory can still prove the
+      // provider/model configuration after any number of subsequent moves.
+      if (job.version !== 1 || typeof job.documentId !== "string" ||
+          job.sourceHash !== sourceHash || job.pageCount !== options.sizes.length ||
+          job.outputDir !== folder || checkpointId(job.documentId, sourceHash, options.api) !== entry.name)
+        continue;
+      const manifest = validateManifest(JSON.parse(await readFile(join(folder, "manifest.json"), "utf8")),
+        job.id, sourceHash, job.pageCount);
+      if (manifest.status === "completed" && manifest.final &&
+          manifest.pages.every((page) => page.status === "completed")) return folder;
+    } catch {
+      // Incomplete, legacy and malformed jobs are not relocation candidates.
+    }
+  }
+  return undefined;
 }
 export class TranslationManager {
   private static owners = new Map<string, TranslationManager>();
@@ -50,7 +71,7 @@ export class TranslationManager {
   private starting = false;
   private cancelling = false;
   job?: TranslationJob;
-  private run?: AgentRun;
+  private run?: TranslationRun;
   private timer?: ReturnType<typeof setInterval>;
   private watcher?: FSWatcher;
   private seen = new Map<number, string>();
@@ -61,9 +82,7 @@ export class TranslationManager {
   private callbacks?: TranslationCallbacks;
   private lastError = "";
   private terminalError = "";
-  constructor(agents: AgentService,
-    private createRun = (options: TranslationOptions, job: TranslationJob, emit: (event: AgentEvent) => void) =>
-      new TranslationPipeline(agents, options, job, emit).start()) {}
+  constructor(private createRun = startTranslation) {}
   get active(): boolean {
     return !!this.run || this.starting || this.cancelling;
   }
@@ -111,9 +130,12 @@ export class TranslationManager {
     this.terminalError = "";
     this.seen.clear();
     this.job = undefined;
-    const sourceHash = digest(options.bytes),
-      association = digest(Buffer.from(options.documentId + sourceHash + ":paragraph-v1"));
-    const folder = join(options.root, "documents", association, "translation");
+    if (!restoreOnly) validateApi(options.api);
+    const sourceHash = digest(options.bytes);
+    const expectedFolder = join(options.root, "documents", checkpointId(options.documentId, sourceHash, options.api), "translation");
+    let folder = expectedFolder;
+    try { await readFile(join(folder, "job.json")); }
+    catch { folder = await movedCheckpoint(options, sourceHash) ?? expectedFolder; }
     if (restoreOnly) {
       try {
         await readFile(join(folder, "job.json"));
@@ -129,7 +151,7 @@ export class TranslationManager {
       if (
         old.version === 1 &&
         old.sourceHash === sourceHash &&
-        old.documentId === options.documentId &&
+        (old.documentId === options.documentId || folder !== expectedFolder) &&
         old.pageCount === options.sizes.length &&
         old.outputDir === folder
       )
@@ -147,8 +169,7 @@ export class TranslationManager {
         sourceLanguage: "en",
         targetLanguage: "zh-CN",
         outputDir: folder,
-        toolDir: join(options.root, "tools"),
-        fontPath: options.fontPath,
+        toolDir: join(options.root, "tools", "pdfmath-2.9.0-v1"),
       };
       await writeFile(this.job.sourcePath, options.bytes);
       await writeFile(
@@ -173,7 +194,23 @@ export class TranslationManager {
       const saved = JSON.parse(
         await readFile(join(folder, "saved.json"), "utf8"),
       ) as { path: string; sha256: string };
-      this.saved = digest(await readFile(saved.path)) === saved.sha256;
+      // Both PDFs may have moved together, or the source may also be renamed.
+      // Never adopt a same-named export unless it matches the saved digest.
+      const candidates = new Set([saved.path,
+        join(dirname(options.sourcePath), basename(saved.path)),
+        options.sourcePath.replace(/\.pdf$/i, ".zh-CN.pdf")]);
+      for (const path of candidates) {
+        try {
+          if (digest(await readFile(path)) !== saved.sha256) continue;
+          this.saved = true;
+          if (path !== saved.path) {
+            const temp = join(folder, `saved.${randomUUID()}.tmp`);
+            await writeFile(temp, JSON.stringify({ ...saved, path }));
+            await rename(temp, join(folder, "saved.json"));
+          }
+          break;
+        } catch { /* Try the next known export location. */ }
+      }
     } catch {
       /* Not saved yet. */
     }
@@ -192,7 +229,7 @@ export class TranslationManager {
     if (restoreOnly) {
       callbacks.event({
         type: "status",
-        text: "已恢复逐页翻译检查点；点击全文翻译可继续未完成页",
+        text: "已恢复翻译记录；点击全文翻译可重试",
       });
       return;
     }
@@ -212,7 +249,7 @@ export class TranslationManager {
       this.run = this.createRun(options, job,
         (event) => {
           if (event.type === "error") this.terminalError = event.text;
-          // Agent completion alone is not a delivered translation.
+          // Engine completion alone is not a delivered translation.
           if (event.type === "done" || event.type === "error") return;
           callbacks.event(event);
         },
@@ -234,7 +271,7 @@ export class TranslationManager {
             if (!this.saved) {
               this.terminalError ||=
                 this.lastError ||
-                "Agent 已结束，但未交付完整译文；点击重试可继续未完成页";
+                "翻译引擎已结束，但未交付完整译文；点击重试";
               await this.updateManifest((manifest) => {
                 manifest.status = "failed";
                 manifest.error = this.terminalError;

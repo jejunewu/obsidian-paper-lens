@@ -46,8 +46,10 @@ export class PdfReader {
   onMove?: (id: string, delta: [number, number]) => void;
   onResize?: (id: string, rect: Rect) => void;
   onZoom?: (zoom: number) => void;
+  onSelection?: () => void;
   private finishPointer?: () => void;
   private zoomFrame = 0;
+  private selectionFrame = 0;
   private gestureZoom?: number;
   private zoomAnchor?: { slot: Slot; x: number; y: number; clientX: number; clientY: number };
   private suppressScroll = false;
@@ -76,6 +78,8 @@ export class PdfReader {
     this.resize.observe(el);
     el.addEventListener("scroll", this.scrolled);
     el.addEventListener("pointerdown", this.pointerDown);
+    el.addEventListener("pointerup", this.selectionCompleted);
+    el.addEventListener("keyup", this.selectionCompleted);
     el.addEventListener("wheel", this.wheel, { passive: false });
   }
   sizes: PageSize[] = [];
@@ -223,6 +227,7 @@ export class PdfReader {
     this.navigate(pos);
   }
   setTool(tool: "select" | "pan" | "text"): void {
+    cancelAnimationFrame(this.selectionFrame);
     this.tool = tool;
     this.el.dataset.tool = tool;
   }
@@ -314,6 +319,26 @@ export class PdfReader {
     }
     return match;
   }
+  clearSelection(): void {
+    this.el.ownerDocument.getSelection()?.removeAllRanges();
+  }
+  private selectionCompleted = (event: PointerEvent | KeyboardEvent): void => {
+    if (this.disposed || this.readonly || this.tool !== "select") return;
+    if (event.type === "pointerup") {
+      if ((event as PointerEvent).button !== 0) return;
+    } else {
+      const key = event as KeyboardEvent;
+      const selecting = key.shiftKey && /^(Arrow(Left|Right|Up|Down)|Home|End|PageUp|PageDown)$/.test(key.key);
+      if (!selecting && !((key.ctrlKey || key.metaKey) && key.key.toLowerCase() === "a")) return;
+    }
+    cancelAnimationFrame(this.selectionFrame);
+    // Wait for the browser's default selection action to finish, rather than
+    // applying annotations while the user is still dragging the selection.
+    this.selectionFrame = requestAnimationFrame(() => {
+      this.selectionFrame = 0;
+      if (!this.disposed && !this.readonly && this.tool === "select") this.onSelection?.();
+    });
+  };
   private scrolled = (): void => {
     if (this.suppressScroll || this.disposed) return;
     cancelAnimationFrame(this.frame);
@@ -587,11 +612,14 @@ export class PdfReader {
     this.disposed = true;
     this.finishPointer?.();
     cancelAnimationFrame(this.zoomFrame);
+    cancelAnimationFrame(this.selectionFrame);
     cancelAnimationFrame(this.frame);
     this.observer.disconnect();
     this.resize.disconnect();
     this.el.removeEventListener("scroll", this.scrolled);
     this.el.removeEventListener("pointerdown", this.pointerDown);
+    this.el.removeEventListener("pointerup", this.selectionCompleted);
+    this.el.removeEventListener("keyup", this.selectionCompleted);
     this.el.removeEventListener("wheel", this.wheel);
     for (const slot of this.slots) this.release(slot);
     for (const doc of this.docs) void doc.destroy();

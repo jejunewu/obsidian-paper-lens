@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 tool_dir="${1:?Usage: bootstrap.sh TOOL_DIR}"
+script_dir="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$tool_dir"
 export UV_INSTALL_DIR="$tool_dir/bin"
 export UV_PYTHON_INSTALL_DIR="$tool_dir/python"
@@ -13,7 +14,7 @@ if [ ! -x "$tool_dir/venv/bin/python" ]; then
   "$tool_dir/bin/uv" python install 3.12.12
   "$tool_dir/bin/uv" venv --python 3.12.12 "$tool_dir/venv"
 fi
-if ! "$tool_dir/venv/bin/python" -c 'import pymupdf; assert pymupdf.VersionBind == "1.25.5"' 2>/dev/null; then
-  "$tool_dir/bin/uv" pip install --python "$tool_dir/venv/bin/python" --index-url https://pypi.org/simple PyMuPDF==1.25.5
+if ! "$tool_dir/venv/bin/python" "$script_dir/bridge.py" --check >/dev/null 2>&1; then
+  "$tool_dir/bin/uv" pip install --python "$tool_dir/venv/bin/python" -r "$script_dir/requirements.txt"
 fi
-"$tool_dir/venv/bin/python" -c 'import pymupdf; assert pymupdf.VersionBind == "1.25.5"; print("Paper Lens translation environment ready")'
+"$tool_dir/venv/bin/python" "$script_dir/bridge.py" --check

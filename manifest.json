@@ -3,7 +3,7 @@
   "name": "Paper Lens",
   "version": "0.2.0",
   "minAppVersion": "1.12.7",
-  "description": "Read, translate and annotate papers with local Codex and Claude Code agents.",
+  "description": "Read and annotate papers; translate with PDFMathTranslate and custom model APIs.",
   "author": "wu",
   "isDesktopOnly": true
 }

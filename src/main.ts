@@ -8,20 +8,19 @@ import {
 } from "obsidian";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { AgentService } from "./agents/service";
 import {
   DEFAULT_SETTINGS,
+  normalizeSettings,
   PaperLensSettingsTab,
   type PaperLensSettings,
 } from "./settings";
-import type { AgentKind } from "./core/types";
+import type { ModelApiConfig } from "./translation/config";
 import { PdfPicker } from "./ui/modals";
 import { PaperLensView, VIEW_TYPE } from "./ui/view";
 import { disposePdfRuntime } from "./pdf/runtime";
 
 export default class PaperLensPlugin extends Plugin {
   settings: PaperLensSettings = { ...DEFAULT_SETTINGS };
-  agents = new AgentService();
   get resourceRoot(): string {
     return join(
       this.basePath,
@@ -29,14 +28,16 @@ export default class PaperLensPlugin extends Plugin {
       "resources",
     );
   }
-  get sdkPath(): string {
-    return join(this.resourceRoot, "claude", "sdk.cjs");
+  get runtimePath(): string {
+    return join(this.resourceRoot, "pdfmath");
   }
-  get skillPath(): string {
-    return (
-      this.settings.skillPath.replace(/^~(?=\/)/, homedir()) ||
-      join(this.resourceRoot, "skills/paper-lens-translate/SKILL.md")
-    );
+  get apiConfig(): ModelApiConfig {
+    return {
+      baseUrl: this.settings.apiBaseUrl, model: this.settings.apiModel,
+      apiKey: this.app.secretStorage.getSecret(this.settings.apiKeySecret) ?? "",
+      timeout: this.settings.apiTimeout, concurrency: this.settings.translationConcurrency,
+      effort: this.settings.reasoningEffort, autoGlossary: this.settings.autoGlossary,
+    };
   }
   get workRoot(): string {
     return resolve(
@@ -50,24 +51,13 @@ export default class PaperLensPlugin extends Plugin {
       throw new Error("Paper Lens 需要本地桌面 Vault");
     return adapter.getBasePath();
   }
-  cliPath(kind: AgentKind): string {
-    return kind === "codex"
-      ? this.settings.codexPath
-      : this.settings.claudePath;
-  }
-  model(kind: AgentKind): string | undefined {
-    return (
-      (kind === "codex"
-        ? this.settings.codexModel
-        : this.settings.claudeModel) || undefined
-    );
-  }
   async onload(): Promise<void> {
     if (!Platform.isDesktopApp) {
-      new Notice("Paper Lens 首版仅支持 macOS 桌面");
+      new Notice("Paper Lens 仅支持 macOS 桌面");
       return;
     }
-    this.settings = { ...DEFAULT_SETTINGS, ...(await this.loadData()) };
+    this.settings = normalizeSettings(await this.loadData());
+    await this.saveSettings();
     this.registerView(VIEW_TYPE, (leaf) => new PaperLensView(leaf, this));
     this.addSettingTab(new PaperLensSettingsTab(this.app, this));
     this.addCommand({
@@ -131,7 +121,6 @@ export default class PaperLensPlugin extends Plugin {
     }
   }
   onunload(): void {
-    this.agents.dispose();
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE))
       if (leaf.view instanceof PaperLensView) leaf.view.shutdown();
     disposePdfRuntime();

@@ -1,4 +1,4 @@
-import type { AgentEvent, JobManifest } from "../core/types";
+import type { TranslationEvent, JobManifest } from "../core/types";
 
 export class TranslationStatus {
   private counts = "";
@@ -10,15 +10,26 @@ export class TranslationStatus {
     this.counts = this.phase = this.failure = this.saved = "";
     this.eventFailure = false;
   }
-  event(event: AgentEvent): void {
+  event(event: TranslationEvent): void {
+    if (event.type === "progress") {
+      const stages: Record<string, string> = {
+        "Parse PDF and Create Intermediate Representation": "解析 PDF",
+        DetectScannedFile: "检测扫描页", "Parse Page Layout": "识别版面",
+        "Parse Paragraphs": "识别段落", "Parse Formulas and Styles": "识别公式与样式",
+        "Automatic Term Extraction": "提取术语", "Translate Paragraphs": "翻译段落",
+        Typesetting: "排版", "Add Fonts": "嵌入字体", "Generate drawing instructions": "生成页面",
+        "Subset font": "字体子集化", "Save PDF": "保存 PDF",
+      };
+      const percent = Number.isFinite(event.percent) ? Math.max(0, Math.min(100, event.percent)) : 0;
+      this.phase = `${stages[event.stage] ?? event.stage} ${event.current}/${event.total} · ${percent.toFixed(0)}%`;
+    }
     if (event.type === "status") this.phase = event.text;
     if (event.type === "error") {
       this.failure = event.text;
       this.eventFailure = true;
     }
     if (event.type === "cancelled")
-      this.phase = "翻译已取消；已完成页面保留，点击重试可继续";
-    if (event.type === "permission") this.phase = "等待你确认下方的任务权限";
+      this.phase = "翻译已取消；点击重试重新处理";
   }
   progress(manifest: JobManifest): void {
     const completed = manifest.pages.filter(
@@ -51,7 +62,7 @@ export class TranslationStatus {
     return [
       this.counts,
       this.failure
-        ? `翻译失败：${this.failure}；点击“翻译 / 重试失败页”继续，详情见下方`
+        ? `翻译失败：${this.failure}；点击“全文翻译”重试，详情见下方`
         : this.phase,
     ]
       .filter(Boolean)

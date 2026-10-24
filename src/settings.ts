@@ -1,199 +1,66 @@
 import { PluginSettingTab, Setting, type App } from "obsidian";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { mkdir } from "node:fs/promises";
 import type PaperLensPlugin from "./main";
-import type { AgentKind } from "./core/types";
-import { executable, resolveAgentEnvironment } from "./agents/executables";
-export interface PaperLensSettings {
-  defaultAgent: AgentKind;
-  codexPath: string;
-  claudePath: string;
-  codexModel: string;
-  claudeModel: string;
-  codexEffort: string;
-  claudeEffort: string;
-  translationFullAccess: boolean;
-  translationConcurrency: number;
-  skillPath: string;
-  workDir: string;
-}
-export const DEFAULT_SETTINGS: PaperLensSettings = {
-  defaultAgent: "codex",
-  codexPath: "",
-  claudePath: "",
-  codexModel: "",
-  claudeModel: "",
-  codexEffort: "",
-  claudeEffort: "",
-  translationFullAccess: true,
-  translationConcurrency: 2,
-  skillPath: "",
-  workDir: join(homedir(), "Library/Application Support/Paper Lens"),
-};
+import { apiBaseUrl, testConnection } from "./translation/api";
+export { DEFAULT_SETTINGS, normalizeSettings, type PaperLensSettings } from "./translation/config";
+
 export class PaperLensSettingsTab extends PluginSettingTab {
-  constructor(
-    app: App,
-    private plugin: PaperLensPlugin,
-  ) {
-    super(app, plugin);
-  }
+  constructor(app: App, private plugin: PaperLensPlugin) { super(app, plugin); }
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "Paper Lens" });
-    containerEl.createEl("p", {
-      text: "自动复用本机 Codex / Claude Code 的配置和终端环境，无需重新配置 API Key。下面的路径和模型均为可选覆盖，留空即可。",
-    });
-    new Setting(containerEl).setName("默认 Agent").addDropdown((drop) =>
-      drop
-        .addOptions({ codex: "Codex", claude: "Claude Code" })
-        .setValue(this.plugin.settings.defaultAgent)
+    containerEl.createEl("p", { text: "PDFMathTranslate-next 在本地识别段落和排版，通过你指定的 OpenAI 兼容 API 翻译。" });
+    new Setting(containerEl).setName("模型 API 地址")
+      .setDesc("填写包含 /v1 或服务自定义前缀的 Base URL，也支持完整 /chat/completions 地址。")
+      .addText((text) => text.setValue(this.plugin.settings.apiBaseUrl).setPlaceholder("https://api.example.com/v1")
         .onChange(async (value) => {
-          this.plugin.settings.defaultAgent = value as AgentKind;
-          await this.plugin.saveSettings();
-        }),
-    );
-    const fields: [
-      "codexPath" | "claudePath" | "codexModel" | "claudeModel" | "skillPath" | "workDir",
-      string,
-      string,
-    ][] = [
-      [
-        "codexPath",
-        "Codex CLI 路径",
-        "留空自动检测，例如 /opt/homebrew/bin/codex",
-      ],
-      [
-        "claudePath",
-        "Claude Code CLI 路径",
-        "留空自动检测，例如 ~/.local/bin/claude",
-      ],
-      ["codexModel", "Codex 模型覆盖", "留空沿用本地配置"],
-      ["claudeModel", "Claude 模型覆盖", "留空沿用本地配置"],
-      [
-        "skillPath",
-        "翻译 skill 路径覆盖",
-        "SKILL.md 的绝对路径，留空使用插件自带 skill",
-      ],
-      [
-        "workDir",
-        "工作目录",
-        "论文快照、翻译检查点和工具缓存所在目录",
-      ],
-    ];
-    for (const [key, name, description] of fields)
-      new Setting(containerEl)
-        .setName(name)
-        .setDesc(description)
-        .addText((text) =>
-          text
-            .setValue(this.plugin.settings[key])
-            .setPlaceholder(description)
-            .onChange(async (value) => {
-              this.plugin.settings[key] = value.trim();
-              await this.plugin.saveSettings();
-            }),
-        );
-    new Setting(containerEl).setName("翻译完整权限（免审批）")
-      .setDesc("允许翻译 Agent 访问本机文件、网络并执行命令，后续翻译不逐次询问工具权限。仅作用于 Paper Lens 翻译，不修改全局 CLI 配置；系统及组织限制仍有效。")
-      .addToggle((toggle) => toggle.setValue(this.plugin.settings.translationFullAccess)
-        .onChange(async (value) => {
-          this.plugin.settings.translationFullAccess = value;
+          this.plugin.settings.apiBaseUrl = value.trim();
           await this.plugin.saveSettings();
         }));
-    new Setting(containerEl).setName("翻译并行页数")
-      .setDesc("默认 2 页，可选 1–4 页；较高并发可能触发模型限流。")
+    new Setting(containerEl).setName("API Key")
+      .setDesc("存入 Obsidian 密钥存储，不写入插件 data.json。无认证的本地服务可填任意非空值。")
+      .addText((text) => {
+        text.inputEl.type = "password";
+        text.inputEl.autocomplete = "off";
+        text.setValue(this.plugin.app.secretStorage.getSecret(this.plugin.settings.apiKeySecret) ?? "")
+          .setPlaceholder("API Key")
+          .onChange((value) => this.plugin.app.secretStorage.setSecret(this.plugin.settings.apiKeySecret, value.trim()));
+      });
+    new Setting(containerEl).setName("翻译模型 ID").setDesc("使用服务实际支持的模型；文本模型即可，不要求图片输入。")
+      .addText((text) => text.setValue(this.plugin.settings.apiModel).setPlaceholder("模型 ID")
+        .onChange(async (value) => { this.plugin.settings.apiModel = value.trim(); await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName("推理强度").setDesc("默认不发送 reasoning_effort。仅在服务支持此参数时选择。")
+      .addDropdown((drop) => drop.addOptions({ "": "不发送", minimal: "minimal", low: "low", medium: "medium", high: "high" })
+        .setValue(this.plugin.settings.reasoningEffort)
+        .onChange(async (value) => { this.plugin.settings.reasoningEffort = value; await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName("请求超时（秒）").setDesc("单次 API 请求超时，10–600 秒；不代表整篇论文的耗时。")
+      .addText((text) => text.setValue(String(this.plugin.settings.apiTimeout)).onChange(async (value) => {
+        const number = Number(value);
+        if (!Number.isFinite(number) || number < 10 || number > 600) return;
+        this.plugin.settings.apiTimeout = Math.round(number); await this.plugin.saveSettings();
+      }));
+    new Setting(containerEl).setName("翻译请求并发").setDesc("同时处理的段落请求上限，并作为每秒请求上限；限流时可降低。")
       .addDropdown((drop) => drop.addOptions({ "1": "1", "2": "2", "3": "3", "4": "4" })
         .setValue(String(this.plugin.settings.translationConcurrency))
-        .onChange(async (value) => {
-          this.plugin.settings.translationConcurrency = Number(value);
+        .onChange(async (value) => { this.plugin.settings.translationConcurrency = Number(value); await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName("自动提取术语表").setDesc("提升长文术语一致性，但会额外调用模型并增加耗时。默认关闭。")
+      .addToggle((toggle) => toggle.setValue(this.plugin.settings.autoGlossary)
+        .onChange(async (value) => { this.plugin.settings.autoGlossary = value; await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName("工作目录").setDesc("论文快照、任务记录和本地 Python 环境所在目录。")
+      .addText((text) => text.setValue(this.plugin.settings.workDir)
+        .onChange(async (value) => { this.plugin.settings.workDir = value.trim(); await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName("测试模型 API").setDesc("发送一条简短 Chat Completions 请求，验证地址、认证和模型；会消耗少量额度。")
+      .addButton((button) => button.setButtonText("测试连接").onClick(async () => {
+        button.setDisabled(true);
+        const status = containerEl.createEl("p", { attr: { role: "status" } });
+        status.textContent = "正在连接…";
+        try {
+          this.plugin.settings.apiBaseUrl = apiBaseUrl(this.plugin.settings.apiBaseUrl);
           await this.plugin.saveSettings();
-        }));
-    new Setting(containerEl)
-      .setName("检测本地 Agent")
-      .setDesc("检查可执行文件；登录和模型可用性会在任务启动时验证。")
-      .addButton((button) =>
-        button.setButtonText("检测").onClick(async () => {
-          button.setDisabled(true);
-          const status = containerEl.createEl("p", {
-            attr: { role: "status" },
-          });
-          const results = await Promise.allSettled(
-            (["codex", "claude"] as const).map((kind) =>
-              resolveAgentEnvironment().then((env) =>
-                executable(
-                  kind,
-                  this.plugin.settings[
-                    kind === "codex" ? "codexPath" : "claudePath"
-                  ],
-                  env,
-                ),
-              ),
-            ),
-          );
-          status.textContent = results
-            .map(
-              (result, index) =>
-                `${index ? "Claude" : "Codex"}：${result.status === "fulfilled" ? result.value : String(result.reason)}`,
-            )
-            .join("；");
-          button.setDisabled(false);
-        }),
-      );
-    new Setting(containerEl)
-      .setName("测试 Agent 连接")
-      .setDesc(
-        "用默认 Agent 发送一条简短测试消息，验证现有配置、认证和模型响应。",
-      )
-      .addButton((button) =>
-        button.setButtonText("测试连接").onClick(async () => {
-          button.setDisabled(true);
-          const status = containerEl.createEl("p", {
-            attr: { role: "status" },
-          });
-          status.textContent = "正在连接…";
-          let timeout: ReturnType<typeof setTimeout> | undefined;
-          try {
-            const cwd = join(this.plugin.workRoot, "connection-test");
-            await mkdir(cwd, { recursive: true });
-            const kind = this.plugin.settings.defaultAgent;
-            let output = "";
-            const run = await this.plugin.agents.run(
-              kind,
-              this.plugin.cliPath(kind),
-              this.plugin.sdkPath,
-              {
-                cwd,
-                model: this.plugin.model(kind),
-                prompt:
-                  "This is a Paper Lens connectivity test. Do not use tools. Reply exactly: Paper Lens 连接成功",
-              },
-              (event) => {
-                if (event.type === "delta") output += event.text;
-                if (event.type === "status") status.textContent = event.text;
-                if (event.type === "error")
-                  status.textContent = `连接失败：${event.text}`;
-                if (event.type === "done")
-                  status.textContent = `${kind} 连接成功：${output}`;
-                if (event.type === "cancelled")
-                  status.textContent =
-                    "连接测试超时，请检查本地 CLI 是否能正常响应";
-                if (event.type === "permission") event.respond(false);
-              },
-            );
-            timeout = setTimeout(() => run.cancel(), 60000);
-            await run.done;
-          } catch (error) {
-            status.textContent = `连接失败：${String(error)}`;
-          } finally {
-            if (timeout) clearTimeout(timeout);
-            button.setDisabled(false);
-          }
-        }),
-      );
-    containerEl.createEl("p", {
-      text: "翻译过程可能通过 Agent 安装工具。PyMuPDF 使用 AGPL/商业双重许可；使用和分发要求见 README。插件不保存 CLI 登录凭据。",
-    });
+          status.textContent = `连接成功：${await testConnection(this.plugin.apiConfig)}`;
+        } catch (error) { status.textContent = `连接失败：${String(error)}`; }
+        finally { button.setDisabled(false); }
+      }));
+    containerEl.createEl("p", { text: "首次翻译会下载 Python 依赖、识别模型和字体。翻译 API 费用由服务商收取；本地开源组件的许可和安装说明见 README。" });
   }
 }

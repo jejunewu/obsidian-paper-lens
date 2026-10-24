@@ -3,10 +3,10 @@ import { builtinModules } from "node:module";
 import { cp, mkdir, copyFile, rm } from "node:fs/promises";
 
 async function resources() {
+  await rm("dist/resources", { recursive: true, force: true });
   await mkdir("dist/resources/pdfjs", { recursive: true });
   await cp("assets", "dist/resources/fonts", { recursive: true });
-  await rm("dist/resources/skills", { recursive: true, force: true });
-  await cp("skills", "dist/resources/skills", { recursive: true,
+  await cp("runtime/pdfmath", "dist/resources/pdfmath", { recursive: true,
     filter: (path) => !path.includes("__pycache__") && !path.endsWith(".pyc") });
   for (const file of ["pdf.mjs", "pdf.worker.mjs"])
     await copyFile(
@@ -20,11 +20,6 @@ async function resources() {
   await copyFile(
     "node_modules/pdfjs-dist/LICENSE",
     "dist/resources/pdfjs/LICENSE",
-  );
-  await cp(
-    "node_modules/@anthropic-ai/claude-agent-sdk",
-    "dist/resources/claude",
-    { recursive: true },
   );
   await esbuild.build({
     entryPoints: ["node_modules/pdfjs-dist/build/pdf.mjs"],
@@ -46,18 +41,7 @@ async function resources() {
     target: "es2021",
     outfile: "dist/resources/pdfjs/worker.js",
   });
-  await esbuild.build({
-    entryPoints: ["node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs"],
-    bundle: true,
-    platform: "node",
-    format: "cjs",
-    target: "node18",
-    outfile: "dist/resources/claude/sdk.cjs",
-    define: { "import.meta.url": "__moduleUrl" },
-    banner: {
-      js: 'var __moduleUrl = require("node:url").pathToFileURL(__filename).href;',
-    },
-  });
+
 }
 await resources();
 
