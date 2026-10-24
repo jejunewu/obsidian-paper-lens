@@ -20,6 +20,7 @@ import {
 import { startTranslation } from "./backend";
 import type { ModelApiConfig } from "./config";
 import { apiBaseUrl, validateApi } from "./api";
+import { translationFingerprint } from "../pdf/fingerprint";
 
 export interface TranslationOptions {
   documentId: string;
@@ -41,9 +42,10 @@ function checkpointId(documentId: string, sourceHash: string, api: ModelApiConfi
   return digest(Buffer.from(JSON.stringify([documentId, sourceHash, "pdfmath-2.9.0-babeldoc-0.6.2-v1",
     apiBaseUrl(api.baseUrl), api.model, api.effort, api.autoGlossary])));
 }
-async function movedCheckpoint(options: TranslationOptions, sourceHash: string): Promise<string | undefined> {
+async function reusableCheckpoint(options: TranslationOptions, sourceHash: string): Promise<string | undefined> {
   const documents = join(options.root, "documents");
   const entries = await readdir(documents, { withFileTypes: true }).catch(() => []);
+  let fingerprint: string | undefined;
   for (const entry of entries) {
     if (!entry.isDirectory() || !/^[a-f0-9]{64}$/.test(entry.name)) continue;
     const folder = join(documents, entry.name, "translation");
@@ -52,13 +54,20 @@ async function movedCheckpoint(options: TranslationOptions, sourceHash: string):
       // The historical ID stays unchanged so its directory can still prove the
       // provider/model configuration after any number of subsequent moves.
       if (job.version !== 1 || typeof job.documentId !== "string" ||
-          job.sourceHash !== sourceHash || job.pageCount !== options.sizes.length ||
-          job.outputDir !== folder || checkpointId(job.documentId, sourceHash, options.api) !== entry.name)
+          job.pageCount !== options.sizes.length || job.sourcePath !== join(folder, "source.pdf") ||
+          job.outputDir !== folder || checkpointId(job.documentId, job.sourceHash, options.api) !== entry.name)
         continue;
       const manifest = validateManifest(JSON.parse(await readFile(join(folder, "manifest.json"), "utf8")),
-        job.id, sourceHash, job.pageCount);
-      if (manifest.status === "completed" && manifest.final &&
-          manifest.pages.every((page) => page.status === "completed")) return folder;
+        job.id, job.sourceHash, job.pageCount);
+      if (manifest.status !== "completed" || !manifest.final ||
+          !manifest.pages.every((page) => page.status === "completed")) continue;
+      if (job.sourceHash !== sourceHash) {
+        const snapshot = await readFile(await containedPath(folder, "source.pdf"));
+        if (digest(snapshot) !== job.sourceHash) continue;
+        fingerprint ??= await translationFingerprint(options.bytes);
+        if (await translationFingerprint(snapshot) !== fingerprint) continue;
+      }
+      return folder;
     } catch {
       // Incomplete, legacy and malformed jobs are not relocation candidates.
     }
@@ -135,7 +144,7 @@ export class TranslationManager {
     const expectedFolder = join(options.root, "documents", checkpointId(options.documentId, sourceHash, options.api), "translation");
     let folder = expectedFolder;
     try { await readFile(join(folder, "job.json")); }
-    catch { folder = await movedCheckpoint(options, sourceHash) ?? expectedFolder; }
+    catch { folder = await reusableCheckpoint(options, sourceHash) ?? expectedFolder; }
     if (restoreOnly) {
       try {
         await readFile(join(folder, "job.json"));
@@ -150,7 +159,7 @@ export class TranslationManager {
       ) as TranslationJob;
       if (
         old.version === 1 &&
-        old.sourceHash === sourceHash &&
+        (old.sourceHash === sourceHash || folder !== expectedFolder) &&
         (old.documentId === options.documentId || folder !== expectedFolder) &&
         old.pageCount === options.sizes.length &&
         old.outputDir === folder
@@ -382,10 +391,15 @@ export class TranslationManager {
           )
             throw new Error("最终 PDF 页面尺寸不匹配");
         }
-        if (digest(await callbacks.sourceBytes()) !== job.sourceHash)
-          throw new Error(
-            "原 PDF 已被修改，译文保留在任务目录，未自动保存到原文件夹",
-          );
+        const currentSource = await callbacks.sourceBytes();
+        if (digest(currentSource) !== job.sourceHash) {
+          const snapshot = await readFile(await containedPath(job.outputDir, "source.pdf"));
+          if (digest(snapshot) !== job.sourceHash ||
+              await translationFingerprint(currentSource) !== await translationFingerprint(snapshot))
+            throw new Error(
+              "原 PDF 已被修改，译文保留在任务目录，未自动保存到原文件夹",
+            );
+        }
         if (this.stopped) return;
         const saved = await saveExclusive(
           this.options.sourcePath.replace(/\.pdf$/i, ".zh-CN.pdf"),

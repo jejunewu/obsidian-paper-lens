@@ -14,7 +14,7 @@ import type { Annotation } from "../core/types";
 import { textStyle } from "../core/annotations";
 import { digest } from "../translation/protocol";
 
-function owned(dict: PDFDict): boolean {
+export function isPaperLensAnnotation(dict: PDFDict): boolean {
   const name = dict.get(PDFName.of("NM"));
   return (
     (name instanceof PDFString || name instanceof PDFHexString) &&
@@ -31,7 +31,7 @@ export async function readAnnotations(
     if (!annots) return;
     for (let i = 0; i < annots.size(); i++) {
       const dict = annots.lookup(i);
-      if (!(dict instanceof PDFDict) || !owned(dict)) continue;
+      if (!(dict instanceof PDFDict) || !isPaperLensAnnotation(dict)) continue;
       const data = dict.get(PDFName.of("PaperLensData"));
       if (data instanceof PDFHexString || data instanceof PDFString) {
         try {
@@ -55,7 +55,7 @@ export async function withoutPaperLensAnnotations(
     const keep = doc.context.obj([]);
     for (let i = 0; i < old.size(); i++) {
       const dict = old.lookup(i);
-      if (!(dict instanceof PDFDict) || !owned(dict)) keep.push(old.get(i));
+      if (!(dict instanceof PDFDict) || !isPaperLensAnnotation(dict)) keep.push(old.get(i));
     }
     page.node.set(PDFName.of("Annots"), keep);
   }
@@ -98,7 +98,7 @@ export async function writeAnnotations(
     if (old)
       for (let i = 0; i < old.size(); i++) {
         const dict = old.lookup(i);
-        if (!(dict instanceof PDFDict) || !owned(dict)) keep.push(old.get(i));
+        if (!(dict instanceof PDFDict) || !isPaperLensAnnotation(dict)) keep.push(old.get(i));
       }
     page.node.set(PDFName.of("Annots"), keep);
   }
