@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/paper-lens-logo.png" alt="Paper Lens Logo：论文与镜头" width="160" />
+</p>
+
 # Paper Lens
 
 在 Obsidian 中阅读、批注英文论文，并在同一标签页对照简体中文译文。
