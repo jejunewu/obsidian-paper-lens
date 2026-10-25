@@ -1,0 +1,44 @@
+docs/VALIDATION.md
+  s_c801515aa6d777::t_591f6e23b15c6d 9,12,19
+  s_c801515aa6d777::t_7a8fed1be4669d 26
+docs/TRANSLATION.md
+  s_c801515aa6d777::t_86435b4ba70ea1 16,42,48-54
+  s_c801515aa6d777::t_591f6e23b15c6d 44
+src/pdf/annotation-document.ts
+  s_c801515aa6d777::t_1843ef60e68ba5 1-74
+src/pdf/reader.ts
+  s_c801515aa6d777::t_4c9d313acb5388 60,65,326,339,443,502,561
+src/ui/modals.ts
+  s_c801515aa6d777::t_062ab00da6234f 80
+src/pdf/fingerprint.ts
+  s_c801515aa6d777::t_e1ec50d63357a0 14
+  s_c801515aa6d777::t_9cd58ac1f02dd4 1,15-18
+src/ui/view.ts
+  s_c801515aa6d777::t_5fb46245620f9f 8,14,18-19,26,39-40,60-61,67,86-87,136,257-260,265,287,290,322,326
+  s_c801515aa6d777::t_c7029d5fbffca2 582-583,585,589-590,612-615,617,624,639,641-645,647,650-653,657,659-660,662-664,672-673,676,681,683,685,694-695,698-705,708-710,714,716,718-721,724
+  s_c801515aa6d777::t_19953238155201 331-332,335,338-349,351-373,404-412,423-424,472-477,482,497,499-509,511-519
+  s_c801515aa6d777::t_062ab00da6234f 748,757,773,778,823,830,836-838,867-868,870-878,890-891,901-906,922,925,933
+  s_c801515aa6d777::t_92a75e6d2eb33d 869
+CHANGELOG.md
+  s_c801515aa6d777::t_86435b4ba70ea1 5-7
+src/translation/manager.ts
+  s_c801515aa6d777::t_623a4f0ea7a4a8 39,203-204,210-211,217-229,231-232,234,255
+README.md
+  s_c801515aa6d777::t_86435b4ba70ea1 13,21,53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.51-trip",
+  "base_commit_sha": "f65a4fa6acce742e7d0d72787970b6d18eab9881",
+  "prompts": {},
+  "sessions": {
+    "s_c801515aa6d777": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a16434-c72d-7383-a34e-9996ecf530e6",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wu <w.junjie@trip.com>"
+    }
+  }
+}
