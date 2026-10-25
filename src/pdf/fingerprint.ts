@@ -1,4 +1,4 @@
-import { PDFArray, PDFDict, PDFDocument, PDFName, PDFObject, PDFStream } from "pdf-lib";
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNull, PDFObject, PDFStream } from "pdf-lib";
 import { isPaperLensAnnotation } from "./annotations";
 import { digest } from "../translation/protocol";
 
@@ -11,6 +11,11 @@ export async function translationFingerprint(bytes: Uint8Array): Promise<string>
   doc.catalog.delete(PDFName.of("PaperLensFont"));
   doc.catalog.delete(PDFName.of("PaperLensFontHash"));
   for (const page of doc.getPages()) {
+    const annotationEntry = page.node.get(PDFName.of("Annots"), true);
+    // BabelDOC may emit /Annots null. Like an absent or empty list, it has no
+    // annotations; pdf-lib replaces it with an array when saving our edits.
+    if (annotationEntry && doc.context.lookup(annotationEntry) === PDFNull)
+      page.node.delete(PDFName.of("Annots"));
     const annotations = page.node.Annots();
     if (annotations) {
       const keep = doc.context.obj([]);

@@ -57,12 +57,12 @@ export class PdfReader {
   constructor(
     readonly el: HTMLElement,
     private root: string,
-    private readonly readonly = false,
+    pane: "source" | "translation" = "source",
   ) {
     el.classList.add("pl-reader");
     this.setTool("select");
     el.tabIndex = 0;
-    el.setAttribute("aria-label", readonly ? "译文阅读区域" : "原文阅读区域");
+    el.setAttribute("aria-label", pane === "translation" ? "译文阅读区域" : "原文阅读区域");
     this.observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -323,7 +323,7 @@ export class PdfReader {
     this.el.ownerDocument.getSelection()?.removeAllRanges();
   }
   private selectionCompleted = (event: PointerEvent | KeyboardEvent): void => {
-    if (this.disposed || this.readonly || this.tool !== "select") return;
+    if (this.disposed || this.tool !== "select") return;
     if (event.type === "pointerup") {
       if ((event as PointerEvent).button !== 0) return;
     } else {
@@ -336,7 +336,7 @@ export class PdfReader {
     // applying annotations while the user is still dragging the selection.
     this.selectionFrame = requestAnimationFrame(() => {
       this.selectionFrame = 0;
-      if (!this.disposed && !this.readonly && this.tool === "select") this.onSelection?.();
+      if (!this.disposed && this.tool === "select") this.onSelection?.();
     });
   };
   private scrolled = (): void => {
@@ -440,7 +440,7 @@ export class PdfReader {
     slot.surface
       .querySelectorAll(".pl-annotation")
       .forEach((el) => el.remove());
-    if (this.readonly || !slot.viewport || !slot.rendered) return;
+    if (!slot.viewport || !slot.rendered) return;
     const number = this.slots.indexOf(slot) + 1;
     for (const item of this.annotations.filter((x) => x.page === number))
       for (const rect of item.rects) {
@@ -499,8 +499,7 @@ export class PdfReader {
       item &&
       this.selected === item &&
       this.tool === "select" &&
-      slot?.viewport &&
-      !this.readonly
+      slot?.viewport
     ) {
       e.preventDefault();
       const annotation = this.annotations.find((a) => a.id === item)!;
@@ -559,7 +558,7 @@ export class PdfReader {
       window.addEventListener("pointercancel", cancel, { once: true });
       return;
     }
-    if (this.tool === "text" && slot?.viewport && !this.readonly) {
+    if (this.tool === "text" && slot?.viewport) {
       const bounds = slot.surface.getBoundingClientRect(),
         p = slot.viewport.convertToPdfPoint(
           e.clientX - bounds.left,

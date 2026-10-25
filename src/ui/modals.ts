@@ -77,7 +77,7 @@ export function unsavedDialog(
       onOpen(): void {
         this.contentEl.createEl("h2", { text: "有未保存的 Paper Lens 批注" });
         this.contentEl.createEl("p", {
-          text: "保存会写回原 PDF 并保留首次备份。",
+          text: "保存会将两栏批注分别写回原文和译文 PDF，并保留各自的首次备份。",
         });
         new Setting(this.contentEl)
           .addButton((b) => b.setButtonText("取消").onClick(() => this.close()))

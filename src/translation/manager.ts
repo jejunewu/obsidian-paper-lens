@@ -36,6 +36,7 @@ export interface TranslationCallbacks {
   page: (page: number, bytes: Uint8Array, warnings: string[]) => Promise<void>;
   progress: (manifest: JobManifest) => void;
   saved: (path: string, bytes: Uint8Array) => Promise<void>;
+  restored?: (path: string, bytes: Uint8Array) => Promise<void>;
   sourceBytes: () => Promise<Uint8Array>;
 }
 function checkpointId(documentId: string, sourceHash: string, api: ModelApiConfig): string {
@@ -199,22 +200,38 @@ export class TranslationManager {
     }
     const job = this.job!;
     if (!restoreOnly) await unlink(join(folder, "cancelled")).catch(() => {});
+    let savedDocument: { path: string; bytes: Uint8Array } | undefined;
+    let finalFingerprint: string | undefined;
     try {
       const saved = JSON.parse(
         await readFile(join(folder, "saved.json"), "utf8"),
       ) as { path: string; sha256: string };
       // Both PDFs may have moved together, or the source may also be renamed.
-      // Never adopt a same-named export unless it matches the saved digest.
+      // Annotation edits may change the digest. In that case compare with the
+      // verified immutable final PDF before adopting the edited export.
       const candidates = new Set([saved.path,
         join(dirname(options.sourcePath), basename(saved.path)),
         options.sourcePath.replace(/\.pdf$/i, ".zh-CN.pdf")]);
       for (const path of candidates) {
         try {
-          if (digest(await readFile(path)) !== saved.sha256) continue;
+          const bytes = await readFile(path);
+          const hash = digest(bytes);
+          if (hash !== saved.sha256) {
+            if (!finalFingerprint) {
+              const manifest = validateManifest(JSON.parse(await readFile(join(folder, "manifest.json"), "utf8")),
+                job.id, job.sourceHash, job.pageCount);
+              if (manifest.status !== "completed" || !manifest.final) continue;
+              const final = await readFile(await containedPath(folder, manifest.final.path));
+              if (digest(final) !== manifest.final.sha256) continue;
+              finalFingerprint = await translationFingerprint(final);
+            }
+            if (await translationFingerprint(bytes) !== finalFingerprint) continue;
+          }
           this.saved = true;
-          if (path !== saved.path) {
+          savedDocument = { path, bytes };
+          if (path !== saved.path || hash !== saved.sha256) {
             const temp = join(folder, `saved.${randomUUID()}.tmp`);
-            await writeFile(temp, JSON.stringify({ ...saved, path }));
+            await writeFile(temp, JSON.stringify({ path, sha256: hash }));
             await rename(temp, join(folder, "saved.json"));
           }
           break;
@@ -234,6 +251,8 @@ export class TranslationManager {
       /* Polling covers filesystems without watches. */
     }
     await this.check();
+    if (this.stopped) return;
+    if (savedDocument) await callbacks.restored?.(savedDocument.path, savedDocument.bytes);
     if (this.stopped) return;
     if (restoreOnly) {
       callbacks.event({

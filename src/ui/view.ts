@@ -5,28 +5,25 @@ import {
   type WorkspaceLeaf,
   type ViewStateResult,
 } from "obsidian";
-import { readFile, mkdir, writeFile, unlink } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { PDFDocument } from "pdf-lib";
 import type PaperLensPlugin from "../main";
 import type { Annotation } from "../core/types";
-import { AnnotationStore, textStyle } from "../core/annotations";
+import { textStyle } from "../core/annotations";
 import { clampZoom, type Position } from "../core/geometry";
 import { digest } from "../translation/protocol";
 import { PdfReader } from "../pdf/reader";
-import {
-  readAnnotations,
-  writeAnnotations,
-  withoutPaperLensAnnotations,
-} from "../pdf/annotations";
-import { saveSource } from "../pdf/source";
+import { withoutPaperLensAnnotations } from "../pdf/annotations";
+import { AnnotationDocument } from "../pdf/annotation-document";
 import { TranslationManager } from "../translation/manager";
 import { listModels, validateApi } from "../translation/api";
 import { textDialog, unsavedDialog } from "./modals";
 import { TranslationStatus } from "./translation-status";
 export const VIEW_TYPE = "paper-lens";
 type PaperTool = "select" | "pan" | "text" | "highlight";
+type Pane = "source" | "translation";
 function rgbColor(hex: string): Annotation["color"] {
   return [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255) as Annotation["color"];
 }
@@ -39,11 +36,9 @@ export class PaperLensView extends FileView {
   private source?: PdfReader;
   private translation?: PdfReader;
   private manager: TranslationManager;
-  private store = new AnnotationStore([]);
-  private sourceHash = "";
-  private bytes?: Uint8Array;
+  private original: AnnotationDocument;
+  private translated: AnnotationDocument;
   private pageTexts: string[] = [];
-  private selected?: string;
   private tool: PaperTool = "select";
   private toolButtons = new Map<PaperTool, HTMLButtonElement>();
   private modelInput?: HTMLSelectElement;
@@ -62,12 +57,14 @@ export class PaperLensView extends FileView {
   private translationPanel?: HTMLElement;
   private translateDivider?: HTMLElement;
   private saveButton?: HTMLButtonElement;
+  private translationToggle?: HTMLButtonElement;
+  private editTarget?: HTMLElement;
   private translateButton?: HTMLButtonElement;
   private cancelButton?: HTMLButtonElement;
   private pageInput?: HTMLInputElement;
   private scrollButton?: HTMLButtonElement;
   private scrollLinked = true;
-  private activePane: "source" | "translation" = "source";
+  private activePane: Pane = "source";
   private status?: HTMLElement;
   private progress?: HTMLElement;
   private translationStatus = new TranslationStatus();
@@ -77,7 +74,6 @@ export class PaperLensView extends FileView {
   private saveBusy = false;
   private closed = false;
   private ready = false;
-  private persistence = Promise.resolve();
   private restorePosition?: { page: number; fraction: number };
   private restoreTranslationPosition?: Position;
   constructor(
@@ -87,6 +83,8 @@ export class PaperLensView extends FileView {
     super(leaf);
     this.allowNoFile = true;
     this.manager = new TranslationManager();
+    this.original = new AnnotationDocument(plugin.workRoot);
+    this.translated = new AnnotationDocument(plugin.workRoot);
   }
   getViewType(): string {
     return VIEW_TYPE;
@@ -135,7 +133,7 @@ export class PaperLensView extends FileView {
       typeof translatedPos.fraction === "number" && Number.isFinite(translatedPos.fraction)
       ? { page: translatedPos.page!, fraction: Math.max(0, Math.min(1, translatedPos.fraction)) } : undefined;
     if (
-      path && path !== this.path && this.store.dirty &&
+      path && path !== this.path && this.hasUnsaved &&
       !(await this.resolveUnsaved())
     ) return;
     await super.setState({ ...state, file: path }, result);
@@ -256,14 +254,15 @@ export class PaperLensView extends FileView {
     toolbar.createEl("span", { text: "pt" });
     this.button(toolbar, "删除", () => {
       if (this.saveBusy) throw new Error("批注正在保存，请稍候");
-      if (!this.selected) throw new Error("请先选择 Paper Lens 批注");
-      this.store.remove(this.selected);
-      this.selected = undefined;
+      const doc = this.annotationDocument();
+      if (!doc.selected) throw new Error("请先选择 Paper Lens 批注");
+      doc.store.remove(doc.selected);
+      doc.selected = undefined;
       this.annotationsChanged();
     });
     this.button(toolbar, "撤销", () => {
       if (this.saveBusy) throw new Error("批注正在保存，请稍候");
-      this.store.undo();
+      this.annotationDocument().store.undo();
       this.annotationsChanged();
     });
     this.translateButton = this.button(toolbar, "全文翻译", () =>
@@ -285,20 +284,10 @@ export class PaperLensView extends FileView {
     });
     this.button(toolbar, "刷新模型", () => this.loadModels(true));
     void this.loadModels();
-    const toggleTranslation = this.button(toolbar, "译文", () => {
-      this.translationOpen = !this.translationOpen;
-      this.panels();
-      toggleTranslation.setAttribute(
-        "aria-expanded",
-        String(this.translationOpen),
-      );
-    });
-    toggleTranslation.setAttribute(
-      "aria-expanded",
-      String(this.translationOpen),
-    );
+    this.translationToggle = this.button(toolbar, "打开译文", () => this.setTranslationOpen(!this.translationOpen));
     const row = this.contentEl.createDiv({ cls: "pl-task-row" });
     this.status = row.createDiv({ cls: "pl-status", attr: { role: "status" } });
+    this.editTarget = row.createDiv({ cls: "pl-edit-target", attr: { role: "status" } });
     this.progress = row.createDiv({
       cls: "pl-progress",
       attr: { role: "status" },
@@ -330,65 +319,58 @@ export class PaperLensView extends FileView {
       cls: "pl-panel-header",
     });
     translationHeader.createEl("strong", { text: "简体中文译文" });
-    this.button(translationHeader, "收起", () => {
-      this.translationOpen = false;
-      this.panels();
-    });
+    this.button(translationHeader, "关闭译文", () => this.setTranslationOpen(false));
     this.translation = new PdfReader(
       this.translationPanel.createDiv(),
       this.plugin.resourceRoot,
-      true,
+      "translation",
     );
     this.source.onPosition = (pos) => this.readerPosition("source", pos);
     this.translation.onPosition = (pos) => this.readerPosition("translation", pos);
     for (const pane of ["source", "translation"] as const) {
-      const el = pane === "source" ? this.source.el : this.translation.el;
+      const reader = pane === "source" ? this.source : this.translation;
+      const el = reader.el;
       for (const event of ["pointerdown", "focusin", "wheel"] as const)
         this.registerDomEvent(el, event, () => {
-          this.activePane = pane;
+          this.activatePane(pane);
           if (this.pageInput) this.pageInput.value = String(this.activeReader()?.position().page ?? 1);
         });
-    }
-    this.source.onAnnotation = (id, edit) => {
-      const changed = this.selected !== id;
-      this.selected = id;
-      this.syncStyleControls();
-      if (changed) this.source?.setAnnotations(this.store.items, id);
-      if (edit && !this.saveBusy)
-        void this.editText(id).catch((e) => this.error(e));
-    };
-    this.source.onSelection = () => {
-      try { this.selectionFinished(); }
-      catch (error) { this.error(error); }
-    };
-    this.registerDomEvent(sourceEl, "keydown", (event) => {
-      if (event.key === "Escape" && this.tool === "highlight") this.setTool("select");
-    });
-    this.source.onInsert = (page, point) => {
-      void this.insertText(page, point).then((created) => {
-        if (created) this.setTool("select");
-      }).catch((e) => this.error(e));
-    };
-    this.source.onMove = (id, delta) => {
-      const item = this.store.items.find((x) => x.id === id);
-      if (!item || this.saveBusy) return;
-      this.store.upsert({
-        ...item,
-        rects: item.rects.map((r) => [
-          r[0] + delta[0],
-          r[1] + delta[1],
-          r[2] + delta[0],
-          r[3] + delta[1],
-        ]),
+      reader.onAnnotation = (id, edit) => {
+        this.activatePane(pane);
+        this.annotationDocument(pane).selected = id;
+        this.refreshAnnotations();
+        if (edit && !this.saveBusy) void this.editText(pane, id).catch((e) => this.error(e));
+      };
+      reader.onSelection = () => {
+        try { this.selectionFinished(pane); }
+        catch (error) { this.error(error); }
+      };
+      this.registerDomEvent(el, "keydown", (event) => {
+        if (event.key === "Escape" && this.tool === "highlight") this.setTool("select");
       });
-      this.annotationsChanged();
-    };
-    this.source.onResize = (id, rect) => {
-      const item = this.store.items.find((x) => x.id === id && x.kind === "text");
-      if (!item || this.saveBusy) return;
-      this.store.upsert({ ...item, rects: [rect] });
-      this.annotationsChanged();
-    };
+      reader.onInsert = (page, point) => {
+        this.activatePane(pane);
+        void this.insertText(pane, page, point).then((created) => {
+          if (created) this.setTool("select");
+        }).catch((e) => this.error(e));
+      };
+      reader.onMove = (id, delta) => {
+        const doc = this.annotationDocument(pane);
+        const item = doc.store.items.find((x) => x.id === id);
+        if (!item || this.saveBusy) return;
+        doc.store.upsert({ ...item, rects: item.rects.map((r) => [
+          r[0] + delta[0], r[1] + delta[1], r[2] + delta[0], r[3] + delta[1],
+        ]) });
+        this.annotationsChanged(pane);
+      };
+      reader.onResize = (id, rect) => {
+        const doc = this.annotationDocument(pane);
+        const item = doc.store.items.find((x) => x.id === id && x.kind === "text");
+        if (!item || this.saveBusy) return;
+        doc.store.upsert({ ...item, rects: [rect] });
+        this.annotationsChanged(pane);
+      };
+    }
     this.source.onZoom = this.translation.onZoom = (zoom) => this.setZoom(zoom);
     this.registerDomEvent(panels, "dragover", (e) => {
       e.preventDefault();
@@ -419,12 +401,15 @@ export class PaperLensView extends FileView {
   }
   private setTool(tool: PaperTool): void {
     this.tool = tool;
-    this.source?.setTool(tool === "highlight" ? "select" : tool);
-    this.translation?.setTool(tool === "pan" ? "pan" : "select");
-    if (this.source) this.source.el.dataset.highlight = String(tool === "highlight");
-    if (tool === "highlight") {
-      this.selected = undefined;
-      this.source?.setAnnotations(this.store.items);
+    for (const pane of ["source", "translation"] as const) {
+      const reader = this.reader(pane);
+      reader?.setTool(tool === "highlight" ? "select" : tool);
+      if (reader) reader.el.dataset.highlight = String(tool === "highlight");
+      if (tool === "highlight") {
+        const doc = this.annotationDocument(pane);
+        doc.selected = undefined;
+        reader?.setAnnotations(doc.store.items);
+      }
     }
     for (const [name, button] of this.toolButtons)
       button.setAttribute("aria-pressed", String(name === tool));
@@ -435,8 +420,8 @@ export class PaperLensView extends FileView {
     this.setTool("highlight");
     this.highlight();
   }
-  private selectionFinished(): void {
-    if (this.tool === "highlight" && !this.saveBusy) this.highlight();
+  private selectionFinished(pane = this.activePane): void {
+    if (this.tool === "highlight" && !this.saveBusy) this.highlight(pane);
   }
   private divider(
     parent: HTMLElement,
@@ -484,11 +469,17 @@ export class PaperLensView extends FileView {
     return bar;
   }
   private panels(): void {
+    if (this.translationToggle) {
+      const label = this.translationOpen ? "关闭译文" : "打开译文";
+      this.translationToggle.textContent = label;
+      this.translationToggle.setAttribute("aria-label", label);
+      this.translationToggle.setAttribute("aria-expanded", String(this.translationOpen));
+    }
     if (!this.translationPanel) return;
     this.translationPanel.hidden = !this.translationOpen;
     this.translateDivider!.hidden = !this.translationOpen;
     if (!this.translationOpen) {
-      this.activePane = "source";
+      this.activatePane("source");
       if (this.pageInput) this.pageInput.value = String(this.source?.position().page ?? 1);
     }
     if (this.scrollButton) {
@@ -503,10 +494,29 @@ export class PaperLensView extends FileView {
     }
   }
   private activeReader(): PdfReader | undefined {
-    return this.activePane === "translation" ? this.translation : this.source;
+    return this.reader(this.activePane);
+  }
+  private reader(pane: Pane): PdfReader | undefined {
+    return pane === "translation" ? this.translation : this.source;
+  }
+  private annotationDocument(pane = this.activePane): AnnotationDocument {
+    return pane === "translation" ? this.translated : this.original;
+  }
+  private get hasUnsaved(): boolean {
+    return this.original.store.dirty || this.translated.store.dirty;
+  }
+  private activatePane(pane: Pane): void {
+    if (this.activePane === pane) return;
+    this.activePane = pane;
+    this.refreshAnnotations();
+  }
+  private setTranslationOpen(open: boolean): void {
+    this.translationOpen = open;
+    this.panels();
+    this.app.workspace.requestSaveLayout();
   }
   private readerPosition(pane: "source" | "translation", pos: Position): void {
-    this.activePane = pane;
+    this.activatePane(pane);
     if (this.scrollLinked)
       (pane === "source" ? this.translation : this.source)?.navigate(pos);
     if (this.pageInput) this.pageInput.value = String(pos.page);
@@ -569,13 +579,15 @@ export class PaperLensView extends FileView {
     return input;
   }
   private updateStyle(kind: Annotation["kind"], style: Partial<Annotation>): void {
-    const item = this.store.items.find((x) => x.id === this.selected && x.kind === kind);
+    const doc = this.annotationDocument();
+    const item = doc.store.items.find((x) => x.id === doc.selected && x.kind === kind);
     if (!item || this.saveBusy) return;
-    this.store.upsert({ ...item, ...style });
+    doc.store.upsert({ ...item, ...style });
     this.annotationsChanged();
   }
   private syncStyleControls(): void {
-    const item = this.store.items.find((x) => x.id === this.selected);
+    const doc = this.annotationDocument();
+    const item = doc.store.items.find((x) => x.id === doc.selected);
     if (!item) return;
     if (item.kind === "highlight") {
       this.highlightColor = hexColor(item.color);
@@ -597,34 +609,19 @@ export class PaperLensView extends FileView {
       const file = this.app.vault.getAbstractFileByPath(this.path);
       if (!(file instanceof TFile) || file.extension.toLowerCase() !== "pdf")
         throw new Error("未找到 Vault 中的 PDF");
-      this.bytes = new Uint8Array(await this.app.vault.readBinary(file));
-      this.sourceHash = digest(this.bytes);
+      await this.translated.flush();
+      this.translated = new AnnotationDocument(this.plugin.workRoot);
+      const bytes = new Uint8Array(await this.app.vault.readBinary(file));
+      await this.original.load(join(this.plugin.basePath, this.path), bytes);
       const pages = await this.source!.load(
-        await withoutPaperLensAnnotations(this.bytes),
+        await withoutPaperLensAnnotations(bytes),
       );
       if (this.closed) return;
-      this.store = new AnnotationStore(await readAnnotations(this.bytes));
       this.pageTexts = pages;
-      try {
-        const pending = JSON.parse(
-          await readFile(this.pendingPath(), "utf8"),
-        ) as { sourceHash: string; items: Annotation[] };
-        if (
-          pending.sourceHash === this.sourceHash &&
-          Array.isArray(pending.items)
-        ) {
-          for (const item of this.store.items)
-            if (!pending.items.some((x) => x.id === item.id))
-              this.store.remove(item.id);
-          for (const item of pending.items) this.store.upsert(item);
-        }
-      } catch {
-        /* No pending edits for this version. */
-      }
       this.translation!.placeholders(this.source!.sizes);
       this.source!.setZoom(this.zoom);
       this.translation!.setZoom(this.zoom);
-      this.annotationsChanged();
+      this.annotationsChanged("source");
       if (this.pageInput) this.pageInput.max = String(pages.length);
       this.ready = true;
       this.status!.textContent = `${file.basename} · ${pages.length} 页${pages.some((text) => !text.trim()) ? " · 含无文本页，扫描页不支持翻译" : ""}`;
@@ -639,45 +636,32 @@ export class PaperLensView extends FileView {
       this.error(e);
     }
   }
-  private pendingPath(): string {
-    return join(
-      this.plugin.workRoot,
-      "drafts",
-      digest(
-        Buffer.from(this.plugin.basePath + "/" + this.path + this.sourceHash),
-      ) + ".json",
-    );
-  }
-  private annotationsChanged(): void {
+  private refreshAnnotations(): void {
     this.syncStyleControls();
-    this.source?.setAnnotations(this.store.items, this.selected);
+    for (const pane of ["source", "translation"] as const) {
+      const doc = this.annotationDocument(pane);
+      this.reader(pane)?.setAnnotations(doc.store.items, this.activePane === pane ? doc.selected : undefined);
+    }
+    if (this.editTarget) this.editTarget.textContent = `当前编辑：${this.activePane === "source" ? "原文" : "译文"}`;
     if (this.saveButton) {
-      this.saveButton.textContent = this.store.dirty ? "保存 *" : "保存";
+      this.saveButton.textContent = this.hasUnsaved ? "保存 *" : "保存";
       this.saveButton.disabled = this.saveBusy;
     }
-    if (!this.path || !this.sourceHash) return;
-    const path = this.pendingPath(),
-      value = JSON.stringify({
-        sourceHash: this.sourceHash,
-        items: this.store.items,
-      });
-    const dirty = this.store.dirty;
-    this.persistence = this.persistence
-      .catch(() => {})
-      .then(async () => {
-        await mkdir(join(this.plugin.workRoot, "drafts"), { recursive: true });
-        if (dirty) await writeFile(path, value);
-        else await unlink(path).catch(() => {});
-      });
-    void this.persistence.catch((e) =>
+  }
+  private annotationsChanged(pane = this.activePane): void {
+    this.refreshAnnotations();
+    void this.annotationDocument(pane).changed().catch((e) =>
       this.error(`无法保存批注恢复草稿：${String(e)}`),
     );
   }
-  private highlight(): void {
+  private highlight(pane = this.activePane): void {
     if (this.saveBusy) throw new Error("批注正在保存，请稍候");
-    const selection = this.source?.selection();
+    const reader = this.reader(pane);
+    const selection = reader?.selection();
     if (!selection?.text.trim()) return;
-    this.store.upsert({
+    const doc = this.editableDocument(pane);
+    this.activatePane(pane);
+    doc.store.upsert({
       id: randomUUID(),
       page: selection.page,
       kind: "highlight",
@@ -685,18 +669,20 @@ export class PaperLensView extends FileView {
       text: selection.text,
       color: rgbColor(this.highlightColor),
     });
-    this.annotationsChanged();
-    this.source?.clearSelection();
+    this.annotationsChanged(pane);
+    reader?.clearSelection();
   }
   private async insertText(
+    pane: Pane,
     page: number,
     point: [number, number],
   ): Promise<boolean> {
     if (this.saveBusy) return false;
+    const doc = this.editableDocument(pane);
     const text = await textDialog(this.app, "");
-    if (!text || this.closed || this.saveBusy) return false;
+    if (!text || this.closed || this.saveBusy || doc !== this.annotationDocument(pane)) return false;
     const id = randomUUID();
-    this.store.upsert({
+    doc.store.upsert({
       id,
       page,
       kind: "text",
@@ -705,45 +691,37 @@ export class PaperLensView extends FileView {
       color: rgbColor(this.textColor),
       fontSize: this.fontSize,
     });
-    this.selected = id;
-    this.annotationsChanged();
+    doc.selected = id;
+    this.annotationsChanged(pane);
     return true;
   }
-  private async editText(id: string): Promise<void> {
-    const item = this.store.items.find((x) => x.id === id);
+  private editableDocument(pane: Pane): AnnotationDocument {
+    const doc = this.annotationDocument(pane);
+    if (!doc.bytes) throw new Error(pane === "translation" ? "请等待译文完成并保存后再添加批注" : "请先打开 PDF");
+    return doc;
+  }
+  private async editText(pane: Pane, id: string): Promise<void> {
+    const doc = this.annotationDocument(pane);
+    const item = doc.store.items.find((x) => x.id === id);
     if (!item || item.kind !== "text") return;
     const text = await textDialog(this.app, item.text);
-    if (text && !this.saveBusy) {
-      this.store.upsert({ ...item, text });
-      this.annotationsChanged();
+    if (text && !this.closed && !this.saveBusy && doc === this.annotationDocument(pane)) {
+      doc.store.upsert({ ...item, text });
+      this.annotationsChanged(pane);
     }
   }
   private async save(): Promise<void> {
-    if (this.saveBusy || !this.store.dirty || !this.bytes) return;
+    if (this.saveBusy || !this.hasUnsaved) return;
     this.saveBusy = true;
-    this.annotationsChanged();
+    this.refreshAnnotations();
     try {
-      const previousDraft = this.pendingPath();
-      const written = await writeAnnotations(
-        this.bytes,
-        this.store.items,
-        await readFile(
-          join(this.plugin.resourceRoot, "fonts/NotoSansCJKsc-Regular.otf"),
-        ),
-      );
-      this.sourceHash = await saveSource(
-        join(this.plugin.basePath, this.path),
-        this.sourceHash,
-        written,
-      );
-      this.bytes = written;
-      await this.persistence;
-      await unlink(previousDraft).catch(() => {});
-      this.store.saved();
-      new Notice("批注已保存；首次原文备份保存在 .paper-lens.bak");
+      const font = await readFile(join(this.plugin.resourceRoot, "fonts/NotoSansCJKsc-Regular.otf"));
+      await this.original.save(font);
+      await this.translated.save(font);
+      new Notice("批注已保存到对应 PDF；首次备份保存在 .paper-lens.bak");
     } finally {
       this.saveBusy = false;
-      this.annotationsChanged();
+      this.refreshAnnotations();
     }
   }
   private setZoom(zoom: number): void {
@@ -767,7 +745,7 @@ export class PaperLensView extends FileView {
     this.app.workspace.requestSaveLayout();
   }
   private async translate(restoreOnly = false): Promise<void> {
-    if (!this.ready || !this.bytes)
+    if (!this.ready || !this.original.bytes)
       throw new Error("请先打开可选中文字的论文 PDF");
     if (this.manager.active) throw new Error("当前论文已有翻译任务");
     if (this.pageTexts.every((text) => !text.trim())) {
@@ -776,8 +754,7 @@ export class PaperLensView extends FileView {
     }
     if (!restoreOnly) {
       validateApi(this.plugin.apiConfig);
-      this.translationOpen = true;
-      this.panels();
+      this.setTranslationOpen(true);
       this.translateButton!.disabled = true;
       this.cancelButton!.hidden = false;
       for (const input of [this.modelInput, this.customModelInput, this.effortInput])
@@ -793,12 +770,12 @@ export class PaperLensView extends FileView {
     });
     this.progress!.textContent = this.translationStatus.text;
     try {
-      const pdf = await PDFDocument.load(this.bytes);
+      const pdf = await PDFDocument.load(this.original.bytes);
       await this.manager.start(
         {
           documentId: `${this.plugin.basePath}/${this.path}`,
           sourcePath: join(this.plugin.basePath, this.path),
-          bytes: this.bytes,
+          bytes: this.original.bytes,
           sizes: pdf.getPages().map((page) => page.getSize()),
           root: this.plugin.workRoot,
           runtimePath: this.plugin.runtimePath,
@@ -843,18 +820,21 @@ export class PaperLensView extends FileView {
           },
           page: async (page, bytes, warnings) => {
             if (!this.closed) {
-              await this.translation!.pageArtifact(page, bytes);
+              if (!this.translated.bytes) await this.translation!.pageArtifact(page, bytes);
               if (warnings.length)
                 new Notice(`第 ${page} 页：${warnings.join("；")}`);
             }
           },
           saved: async (path, bytes) => {
             if (!this.closed) {
-              await this.translation!.merged(bytes);
+              await this.loadTranslation(path, bytes);
               this.translationStatus.save(path);
               this.progress!.textContent = this.translationStatus.text;
               new Notice(`译文已保存：${path}`);
             }
+          },
+          restored: async (path, bytes) => {
+            if (!this.closed) await this.loadTranslation(path, bytes);
           },
         },
         restoreOnly,
@@ -884,6 +864,18 @@ export class PaperLensView extends FileView {
       throw e;
     }
   }
+  private async loadTranslation(path: string, bytes: Uint8Array): Promise<void> {
+    // Repeated restoration must not replace edits still in the recovery draft.
+    if (this.translated.path !== path || this.translated.hash !== digest(bytes)) {
+      if (this.translated.store.dirty) {
+        if (!(await this.resolveUnsaved())) return;
+        bytes = await readFile(path);
+      }
+      await this.translated.load(path, bytes);
+    }
+    await this.translation!.merged(await withoutPaperLensAnnotations(this.translated.bytes!));
+    this.annotationsChanged("translation");
+  }
   private async resolveUnsaved(): Promise<boolean> {
     const choice = await unsavedDialog(this.app);
     if (choice === "cancel") return false;
@@ -895,9 +887,8 @@ export class PaperLensView extends FileView {
         return false;
       }
     } else {
-      this.store.saved();
-      this.annotationsChanged();
-      await this.persistence;
+      await Promise.all([this.original.discard(), this.translated.discard()]);
+      this.refreshAnnotations();
     }
     return true;
   }
@@ -907,6 +898,12 @@ export class PaperLensView extends FileView {
     new Notice(`Paper Lens：${text}`, 10000);
   }
   fileRenamed(path: string, oldPath: string): void {
+    const before = join(this.plugin.basePath, oldPath);
+    const after = join(this.plugin.basePath, path);
+    for (const doc of [this.original, this.translated]) {
+      if (doc.path === before || doc.path.startsWith(before + "/"))
+        void doc.rename(after + doc.path.slice(before.length)).catch((error) => this.error(error));
+    }
     if (this.path === oldPath || this.path.startsWith(oldPath + "/")) {
       this.path = path + this.path.slice(oldPath.length);
       this.manager.dispose();
@@ -922,10 +919,10 @@ export class PaperLensView extends FileView {
     this.translation?.dispose();
   }
   async onClose(): Promise<void> {
-    if (!this.closed && this.store.dirty) {
+    if (!this.closed && this.hasUnsaved) {
       const resolved = await this.resolveUnsaved();
       if (!resolved) {
-        await this.persistence;
+        await Promise.all([this.original.flush(), this.translated.flush()]);
         const file = this.app.vault.getAbstractFileByPath(this.path);
         if (file instanceof TFile)
           setTimeout(() => {
@@ -933,7 +930,7 @@ export class PaperLensView extends FileView {
           }, 0);
       }
     }
-    await this.persistence;
+    await Promise.all([this.original.flush(), this.translated.flush()]);
     this.shutdown();
   }
 }
