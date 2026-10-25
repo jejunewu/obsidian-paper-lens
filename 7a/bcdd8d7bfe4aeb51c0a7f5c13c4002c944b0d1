@@ -1,0 +1,19 @@
+README.md
+  s_552c13beb99c3c::t_59366ef87fc7d3 1-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.51-trip",
+  "base_commit_sha": "7abcdd8d7bfe4aeb51c0a7f5c13c4002c944b0d1",
+  "prompts": {},
+  "sessions": {
+    "s_552c13beb99c3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a17357-30d3-7103-aa84-88b7abe4716d",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wu <w.junjie@trip.com>"
+    }
+  }
+}
