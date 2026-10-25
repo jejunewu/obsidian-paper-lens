@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="docs/images/paper-lens-logo.png" alt="Paper Lens Logo：论文与镜头" width="160" />
+  <img src="docs/images/paper-lens-logo.png" alt="论镜（Paper Lens）Logo：论文与镜头" width="160" />
 </p>
 
-# Paper Lens
+# Paper Lens · 论镜
 
-在 Obsidian 中阅读、批注英文论文，并在同一标签页对照简体中文译文。
+**论镜（Paper Lens）** 是一款 Obsidian 论文阅读插件，支持阅读、批注英文论文，并在同一标签页对照简体中文译文。
 
 - 原文与译文双栏阅读，支持同步或独立滚动、缩放和页码跳转。
 - 荧光笔高亮与文字批注，可分别保存到原文和译文 PDF。
